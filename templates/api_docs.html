@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}API Documentation{% endblock %}
+{% block content %}
+<h1 class="text-2xl font-bold mb-1">API Documentation</h1>
+<p class="text-sm text-gray-400 mb-6">Authenticate requests using your API key.</p>
+
+<div class="card rounded-2xl p-5 mb-4">
+  <div class="text-xs text-gray-400 uppercase mb-2">Base Path</div>
+  <code class="block p-3 rounded-xl bg-[#0b0e0c] text-emerald-400 text-sm break-all">{{ base_path }}</code>
+</div>
+
+<div class="card rounded-2xl p-5">
+  <div class="text-xs text-gray-400 uppercase mb-2">Your API Key</div>
+  <code class="block p-3 rounded-xl bg-[#0b0e0c] text-amber-300 text-sm break-all">{{ user.api_key }}</code>
+</div>
+{% endblock %}
