@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Agent Approval Queue{% endblock %}
+{% block content %}
+<div class="max-w-3xl mx-auto mt-6">
+  <div class="flex items-center justify-between mb-6">
+    <div>
+      <h1 class="text-xl font-bold">Account Creation Requests</h1>
+      <p class="text-xs text-gray-400">Agent: <span class="text-emerald-400">{{ agent_email }}</span></p>
+    </div>
+    <a href="{{ url_for('logout') }}" class="px-3.5 py-2 rounded-xl bg-[#181f1b] text-xs text-rose-400 hover:bg-[#222b26]">
+      Logout
+    </a>
+  </div>
+
+  {% if requests_list %}
+    <div class="space-y-4">
+      {% for req in requests_list %}
+        <div class="card rounded-2xl p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div class="space-y-1">
+            <div class="text-sm font-semibold text-white">{{ req.request_sms }}</div>
+            <div class="text-xs text-gray-400">
+              Time: {{ req.created_at }} | Status:
+              <span class="font-semibold
+                {% if req.status == 'APPROVED' %}text-emerald-400
+                {% elif req.status == 'REJECTED' %}text-rose-400
+                {% else %}text-amber-300{% endif %}">
+                {{ req.status }}
+              </span>
+            </div>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2">
+            <form method="POST" action="{{ url_for('agent_action', email=req.email, action='approve') }}">
+              <button type="submit" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold">
+                Approve
+              </button>
+            </form>
+
+            <form method="POST" action="{{ url_for('agent_action', email=req.email, action='reject') }}" class="flex items-center gap-2">
+              <input type="text" name="reason" placeholder="Reason (optional)"
+                     class="px-3 py-2 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-xs text-white w-36" />
+              <button type="submit" class="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold">
+                Reject
+              </button>
+            </form>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="card rounded-2xl p-8 text-center text-sm text-gray-400">
+      No account creation requests yet.
+    </div>
+  {% endif %}
+</div>
+{% endblock %}
