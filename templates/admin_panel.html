@@ -5,9 +5,31 @@
   <div class="flex items-center justify-between">
     <div>
       <h1 class="text-2xl font-bold">Admin Control Panel</h1>
-      <p class="text-xs text-gray-400">Manage Country Rates, Service Rates, OTP Logs & bKash/Nagad Withdrawals</p>
+      <p class="text-xs text-gray-400">Manage Agent Mail Auto Account, Country Rates, Service Rates, OTP Logs & bKash/Nagad Withdrawals</p>
     </div>
     <a href="{{ url_for('logout') }}" class="px-4 py-2 rounded-xl bg-[#181f1b] text-xs text-rose-400">Logout</a>
+  </div>
+
+  <!-- Agent Mail Auto Account Switch -->
+  <div class="card rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <div class="space-y-1">
+      <h2 class="font-bold text-white">Agent Mail Auto Account Creation</h2>
+      <p class="text-xs text-gray-400">
+        When <span class="text-emerald-400 font-semibold">ON</span>, registering with an agent mail automatically creates the account and redirects to Dashboard.
+        When <span class="text-rose-400 font-semibold">OFF</span>, new account creation is disabled.
+      </p>
+    </div>
+    <form method="POST" action="{{ url_for('toggle_agent_mail_account') }}">
+      {% if agent_mail_auto_account %}
+        <button type="submit" class="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold">
+          Status: ON (Click to Turn OFF)
+        </button>
+      {% else %}
+        <button type="submit" class="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold">
+          Status: OFF (Click to Turn ON)
+        </button>
+      {% endif %}
+    </form>
   </div>
 
   <!-- Country Rate & Service Rate -->
