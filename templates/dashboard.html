@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<h1 class="text-2xl font-bold mb-1">Welcome back, {{ user.name }}!</h1>
+<p class="text-sm text-gray-400 mb-6">Here's what's happening with your account today.</p>
+
+<div class="card rounded-2xl p-5 mb-6 border-amber-500/30 bg-amber-950/15">
+  <div class="font-bold text-amber-300 mb-2">📢 Panel Notice</div>
+  <p class="text-sm text-gray-300">
+    Account status: <span class="text-emerald-400 font-semibold">{{ user.status }}</span> |
+    API Key: <span class="font-mono text-emerald-300">{{ user.api_key }}</span>
+  </p>
+</div>
+
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+  <div class="card rounded-2xl p-5">
+    <div class="text-xs text-gray-400 uppercase mb-1">Today Revenue</div>
+    <div class="text-2xl font-bold text-emerald-400">${{ "%.2f"|format(user.balance) }}</div>
+  </div>
+  <div class="card rounded-2xl p-5">
+    <div class="text-xs text-gray-400 uppercase mb-1">Today OTPs</div>
+    <div class="text-2xl font-bold">0</div>
+  </div>
+</div>
+{% endblock %}
