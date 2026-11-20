@@ -70,12 +70,9 @@ SIDEBAR_ITEMS = [
     {"key": "dashboard", "label": "Dashboard", "group": None},
     {"key": "get-number", "label": "Get Number", "group": "Dialer Panel"},
     {"key": "console", "label": "Console", "group": "Dialer Panel"},
-    {"key": "summary", "label": "Summary", "group": "Dialer Panel"},
     {"key": "access-list", "label": "Access List", "group": "Dialer Panel"},
-    {"key": "sender-range", "label": "Sender / Range", "group": "Dialer Panel"},
     {"key": "profile", "label": "Profile", "group": "Account"},
     {"key": "payment", "label": "Payment", "group": "Account"},
-    {"key": "tweaks", "label": "Tweaks", "group": "Extra"},
     {"key": "api-docs", "label": "API Docs", "group": "Extra"},
 ]
 
@@ -248,6 +245,13 @@ def login():
             flash("Invalid email or password.", "error")
             return redirect(url_for("login"))
 
+        now_dt = datetime.now()
+        user["last_login"] = now_dt.strftime("%d/%m/%Y, %H:%M:%S")
+        if "member_since" not in user:
+            user["member_since"] = now_dt.strftime("%b %Y")
+        if "api_key_created" not in user:
+            user["api_key_created"] = now_dt.strftime("%d/%m/%Y, %H:%M:%S")
+
         session.clear()
         session["user_email"] = email
         return redirect(url_for("dashboard"))
@@ -277,6 +281,7 @@ def register():
         if agent_email not in AGENTS:
             AGENTS[agent_email] = generate_password_hash(DEFAULT_AGENT_PASS)
 
+        now_dt = datetime.now()
         user = {
             "name": name,
             "email": email,
@@ -284,7 +289,10 @@ def register():
             "password_hash": generate_password_hash(password),
             "status": "ACTIVE",
             "uid": secrets.token_hex(5).upper(),
-            "api_key": f"M{secrets.token_hex(8).upper()}",
+            "api_key": f"M{secrets.token_hex(6).upper()}",
+            "api_key_created": now_dt.strftime("%d/%m/%Y, %H:%M:%S"),
+            "member_since": now_dt.strftime("%b %Y"),
+            "last_login": now_dt.strftime("%d/%m/%Y, %H:%M:%S"),
             "balance": 0.00,
             "lifetime_earning": 0.00,
             "otp_count": 0,
@@ -388,6 +396,31 @@ def decide_withdraw(req_id, decision):
                 flash(f"Withdraw {req_id} rejected and balance refunded.", "success")
             break
     return redirect(url_for("admin_panel"))
+
+
+# ---------------- PROFILE API KEY ACTIONS ----------------
+
+@app.route("/api/profile/api-key/<action>", methods=["POST"])
+@user_login_required
+def manage_user_api_key(user, action):
+    now_str = datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
+    if action == "regenerate":
+        user["api_key"] = f"M{secrets.token_hex(6).upper()}"
+        user["api_key_created"] = now_str
+        return jsonify({
+            "ok": True,
+            "api_key": user["api_key"],
+            "created_at": user["api_key_created"],
+            "message": "New API key generated successfully."
+        })
+    elif action == "revoke":
+        user["api_key"] = None
+        return jsonify({
+            "ok": True,
+            "api_key": None,
+            "message": "API key has been revoked."
+        })
+    return jsonify({"ok": False, "message": "Invalid action."}), 400
 
 
 # ---------------- BRIDGE & OTP EARNING LOGIC (সবগুলোই লগইন ছাড়া ব্লক) ----------------
@@ -580,11 +613,13 @@ def section_page(user, section_key):
     if section_key not in valid:
         return redirect(url_for("dashboard"))
 
+    if section_key == "profile":
+        return render_template("profile.html", user=user, sidebar_items=SIDEBAR_ITEMS, active="profile")
     if section_key == "get-number":
         return render_template("get_number.html", user=user, sidebar_items=SIDEBAR_ITEMS, active="get-number")
     if section_key == "console":
         return render_template("console.html", user=user, sidebar_items=SIDEBAR_ITEMS, active="console")
-    if section_key in ("access-list", "sender-range"):
+    if section_key == "access-list":
         return render_template("access_list.html", user=user, sidebar_items=SIDEBAR_ITEMS, active=section_key, section=valid[section_key])
     if section_key == "api-docs":
         return render_template("api_docs.html", user=user, sidebar_items=SIDEBAR_ITEMS, active="api-docs", base_path=f"{get_base_url()}/api/v1")
