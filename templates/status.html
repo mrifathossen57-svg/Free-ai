@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Account Status{% endblock %}
+{% block content %}
+<div class="max-w-md mx-auto mt-14 card rounded-2xl p-6 text-center">
+  {% if user.status == 'PENDING' %}
+    <div class="inline-block px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 text-xs font-semibold mb-3">PENDING APPROVAL</div>
+    <h1 class="text-xl font-bold mb-2">Waiting for Agent Approval</h1>
+    <p class="text-sm text-gray-400 mb-6">
+      An approval mail has been sent to the agent for <span class="text-white">{{ user.email }}</span>. Once approved, your dashboard will unlock.
+    </p>
+  {% elif user.status == 'REJECTED' %}
+    <div class="inline-block px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 text-xs font-semibold mb-3">APPROVE REJECTED</div>
+    <h1 class="text-xl font-bold mb-2">Account Request Rejected</h1>
+    <p class="text-sm text-gray-400 mb-3">
+      Your account (<span class="text-white">{{ user.email }}</span>) was rejected by the agent.
+    </p>
+    <div class="p-3 rounded-xl bg-rose-950/40 border border-rose-800/40 text-xs text-rose-200 mb-6">
+      Reason: {{ user.reject_reason }}
+    </div>
+  {% endif %}
+  <a href="{{ url_for('logout') }}" class="inline-block px-4 py-2 rounded-xl bg-[#1a211d] text-sm hover:bg-[#232c27]">
+    Back to Login
+  </a>
+</div>
+{% endblock %}
