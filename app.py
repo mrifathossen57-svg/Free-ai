@@ -15,11 +15,19 @@ from werkzeug.security import generate_password_hash, check_password_hash
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 
+# ---------------- PRIVATE API TOKEN & UPSTREAM ENDPOINTS ----------------
+# শুধু আপনার Private API Token (mauthapi) নিচে বা Environment Variable (UPSTREAM_API_KEY)-এ বসান:
+PRIVATE_API_TOKEN = os.environ.get("UPSTREAM_API_KEY", "YOUR_PRIVATE_API_TOKEN_HERE").strip()
+
 UPSTREAM_BASE_URL = os.environ.get(
     "UPSTREAM_BASE_URL",
     "https://api.2oo9.cloud/MXS47FLFX0U/tnevs/@public/api"
 ).rstrip("/")
-UPSTREAM_API_KEY = os.environ.get("UPSTREAM_API_KEY", "")
+
+GETNUM_API_URL = f"{UPSTREAM_BASE_URL}/getnum"
+LIVEACCESS_API_URL = f"{UPSTREAM_BASE_URL}/liveaccess"
+SUCCESS_OTP_API_URL = f"{UPSTREAM_BASE_URL}/success-otp"
+CONSOLE_API_URL = f"{UPSTREAM_BASE_URL}/console"
 
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "mdrifatahmmed809@gmail.com").strip().lower()
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "54wx52@@")
@@ -81,9 +89,14 @@ def get_base_url():
         return ""
 
 
-def upstream_headers():
+def get_api_token() -> str:
+    return (PRIVATE_API_TOKEN or os.environ.get("UPSTREAM_API_KEY", "")).strip()
+
+
+def upstream_headers(token: str = None) -> dict:
+    api_key = (token if token is not None else get_api_token()).strip()
     return {
-        "mauthapi": UPSTREAM_API_KEY,
+        "mauthapi": api_key,
         "Content-Type": "application/json",
     }
 
@@ -153,11 +166,17 @@ def send_agent_mail(user):
         return False
 
 
+# ---------------- PRIVATE LOGIN GUARDS ----------------
+
 def user_login_required(f):
+    """অ্যাকাউন্ট লগইন ছাড়া প্যানেলের কোনো পেজ বা API দেখা যাবে না"""
     @wraps(f)
     def decorated(*args, **kwargs):
         email = session.get("user_email")
         if not email or email not in USERS:
+            if request.path.startswith("/api/"):
+                return jsonify({"ok": False, "message": "Login required."}), 401
+            flash("Please login to your account first.", "error")
             return redirect(url_for("login"))
         return f(USERS[email], *args, **kwargs)
     return decorated
@@ -168,6 +187,7 @@ def agent_login_required(f):
     def decorated(*args, **kwargs):
         agent_email = session.get("agent_email")
         if not agent_email:
+            flash("Agent login required.", "error")
             return redirect(url_for("login"))
         return f(agent_email, *args, **kwargs)
     return decorated
@@ -177,6 +197,7 @@ def admin_login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         if not session.get("is_admin"):
+            flash("Admin login required.", "error")
             return redirect(url_for("login"))
         return f(*args, **kwargs)
     return decorated
@@ -369,13 +390,13 @@ def decide_withdraw(req_id, decision):
     return redirect(url_for("admin_panel"))
 
 
-# ---------------- BRIDGE & OTP EARNING LOGIC ----------------
+# ---------------- BRIDGE & OTP EARNING LOGIC (সবগুলোই লগইন ছাড়া ব্লক) ----------------
 
 @app.route("/api/bridge/console")
 @user_login_required
 def bridge_console(user):
     try:
-        r = requests.get(f"{UPSTREAM_BASE_URL}/console", headers=upstream_headers(), timeout=10)
+        r = requests.get(CONSOLE_API_URL, headers=upstream_headers(), timeout=10)
         return jsonify(r.json())
     except Exception as e:
         return jsonify({"meta": {"code": 500, "status": "error"}, "message": str(e), "data": {"hits": []}})
@@ -385,7 +406,7 @@ def bridge_console(user):
 @user_login_required
 def bridge_liveaccess(user):
     try:
-        r = requests.get(f"{UPSTREAM_BASE_URL}/liveaccess", headers=upstream_headers(), timeout=10)
+        r = requests.get(LIVEACCESS_API_URL, headers=upstream_headers(), timeout=10)
         return jsonify(r.json())
     except Exception as e:
         return jsonify({"meta": {"code": 500, "status": "error"}, "message": str(e), "data": {"services": []}})
@@ -403,7 +424,7 @@ def bridge_getnum(user):
 
     try:
         r = requests.post(
-            f"{UPSTREAM_BASE_URL}/getnum",
+            GETNUM_API_URL,
             headers=upstream_headers(),
             json={"rid": clean_rid},
             timeout=12,
@@ -442,11 +463,12 @@ def bridge_getnum(user):
 def bridge_my_numbers(user):
     now = time.time()
     items = USER_NUMBERS.get(user["email"], [])
+    api_token = get_api_token()
 
     active_items = [it for it in items if it["expires_at"] > now and not it["otp_message"]]
-    if active_items and UPSTREAM_API_KEY:
+    if active_items and api_token:
         try:
-            r = requests.get(f"{UPSTREAM_BASE_URL}/success-otp", headers=upstream_headers(), timeout=10)
+            r = requests.get(SUCCESS_OTP_API_URL, headers=upstream_headers(api_token), timeout=10)
             otps = (r.json().get("data") or {}).get("otps") or []
             for it in active_items:
                 num_clean = it["no_plus_number"]
@@ -540,7 +562,7 @@ def payment_page(user):
     )
 
 
-# ---------------- PANEL PAGES ----------------
+# ---------------- PANEL PAGES (সবগুলোতেই অ্যাকাউন্ট লগইন বাধ্যতামূলক) ----------------
 
 @app.route("/dashboard")
 @user_login_required
