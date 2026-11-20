@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %}Profile{% endblock %}
+{% block content %}
+{% set u_name = user.name if user and user.name else "Siam Vai" %}
+{% set u_email = user.email if user and user.email else "" %}
+{% set u_status = (user.status if user and user.status else "ACTIVE")|lower %}
+{% set u_earning = (user.lifetime_earning if user and user.lifetime_earning is not none else 3.28)|float %}
+{% set u_uid = user.uid if user and user.uid else "MNVIEB0LQZA" %}
+{% set u_api_key = user.api_key if user and user.api_key else "MW3QIWJQFUI" %}
+{% set u_member_since = user.member_since if user and user.member_since else "Jun 2026" %}
+{% set u_last_login = user.last_login if user and user.last_login else "20/11/2026, 23:39:00" %}
+{% set u_key_created = user.api_key_created if user and user.api_key_created else "24/08/2026, 10:47:49" %}
+
+<div class="max-w-5xl space-y-6">
+  <!-- Top Header -->
+  <div>
+    <h1 class="text-2xl font-bold tracking-tight">Profile</h1>
+    <p class="text-sm text-gray-400 mt-0.5">Manage personal info, security and API keys.</p>
+  </div>
+
+  <!-- Welcome Card -->
+  <div class="card rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+    <div>
+      <p class="text-xs text-gray-400">Welcome back,</p>
+      <h2 class="text-xl font-bold text-white mt-0.5">{{ u_name }}</h2>
+      {% if u_email %}
+        <p class="text-xs text-gray-400 mt-1">{{ u_email }}</p>
+      {% endif %}
+    </div>
+    <div class="text-left sm:text-right">
+      <span class="text-xs text-gray-400 block">Last login:</span>
+      <span class="text-xs font-mono text-gray-200">{{ u_last_login }}</span>
+    </div>
+  </div>
+
+  <!-- Account Overview -->
+  <div class="card rounded-2xl p-5">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="text-base font-bold">Account Overview</h3>
+      <span id="statusBadge" class="px-3 py-1 rounded-full text-xs font-semibold capitalize
+        {% if u_status in ['active', 'approved'] %}bg-emerald-950 text-emerald-400 border border-emerald-700/40
+        {% elif u_status == 'revoked' %}bg-rose-950 text-rose-400 border border-rose-700/40
+        {% else %}bg-amber-950 text-amber-300 border border-amber-700/40{% endif %}">
+        {{ u_status }}
+      </span>
+    </div>
+
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div class="p-4 rounded-xl bg-[#0c0f0d] border border-[#202824]">
+        <div class="text-xs text-gray-400 mb-1">Life Time Earning</div>
+        <div class="text-lg font-bold text-emerald-400">USD{{ "%.2f"|format(u_earning) }}</div>
+      </div>
+
+      <div class="p-4 rounded-xl bg-[#0c0f0d] border border-[#202824]">
+        <div class="text-xs text-gray-400 mb-1">Member Since</div>
+        <div class="text-lg font-bold text-white">{{ u_member_since }}</div>
+      </div>
+
+      <div class="p-4 rounded-xl bg-[#0c0f0d] border border-[#202824]">
+        <div class="text-xs text-gray-400 mb-1">Public UID</div>
+        <div class="text-lg font-bold font-mono text-cyan-300">{{ u_uid }}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- API Keys Section -->
+  <div class="card rounded-2xl p-5">
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
+      <div>
+        <h3 class="text-base font-bold">API Keys</h3>
+        <p class="text-xs text-gray-400">Use this key to authenticate your API requests.</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <button type="button" onclick="copyApiKey()"
+                class="px-3.5 py-2 rounded-xl bg-[#181f1b] hover:bg-[#202924] border border-[#2a352f] text-xs font-semibold text-gray-200 transition">
+          Copy
+        </button>
+        <button type="button" onclick="apiKeyAction('regenerate')"
+                class="px-3.5 py-2 rounded-xl accent-btn text-white text-xs font-semibold transition">
+          Regenerate
+        </button>
+        <button type="button" onclick="apiKeyAction('revoke')"
+                class="px-3.5 py-2 rounded-xl bg-rose-950/80 hover:bg-rose-900 border border-rose-700/50 text-rose-300 text-xs font-semibold transition">
+          Revoke
+        </button>
+      </div>
+    </div>
+
+    <div class="p-4 rounded-xl bg-[#0c0f0d] border border-[#202824] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+      <div>
+        <div id="apiKeyDisplay" class="font-mono text-sm font-semibold text-emerald-300 break-all">
+          {{ u_api_key if u_api_key else "REVOKED" }}
+        </div>
+        <div id="apiKeyCreated" class="text-xs text-gray-400 mt-1">
+          Created {{ u_key_created }}
+        </div>
+      </div>
+    </div>
+
+    <p id="apiKeyFeedback" class="text-xs text-emerald-400 mt-3 hidden"></p>
+  </div>
+</div>
+
+<script>
+  function showFeedback(msg, isError = false) {
+    const el = document.getElementById("apiKeyFeedback");
+    if (!el) return;
+    el.textContent = msg;
+    el.className = isError
+      ? "text-xs text-rose-400 mt-3 block"
+      : "text-xs text-emerald-400 mt-3 block";
+  }
+
+  function copyApiKey() {
+    const keyText = document.getElementById("apiKeyDisplay")?.textContent?.trim();
+    if (!keyText || keyText === "REVOKED") {
+      showFeedback("No active API key to copy.", true);
+      return;
+    }
+    navigator.clipboard?.writeText(keyText).then(() => {
+      showFeedback("API key copied to clipboard.");
+    }).catch(() => {
+      showFeedback("Could not copy automatically. Please copy manually.", true);
+    });
+  }
+
+  async function apiKeyAction(action) {
+    if (action === "revoke" && !confirm("Are you sure you want to revoke your API key?")) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/profile/api-key/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" }
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        showFeedback(data.message || "Action failed.", true);
+        return;
+      }
+      document.getElementById("apiKeyDisplay").textContent = data.api_key || "REVOKED";
+      if (data.created_at) {
+        document.getElementById("apiKeyCreated").textContent = `Created ${data.created_at}`;
+      }
+      showFeedback(data.message || `API key ${action}d successfully.`);
+    } catch (e) {
+      showFeedback("Network error while updating API key.", true);
+    }
+  }
+</script>
+{% endblock %}
