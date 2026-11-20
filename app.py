@@ -25,11 +25,11 @@ ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "mdrifatahmmed809@gmail.com").strip(
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "54wx52@@")
 DEFAULT_AGENT_PASS = os.environ.get("AGENT_PASSWORD", "54wx52@@")
 
-SMTP_HOST = os.environ.get("SMTP_HOST", "")
+SMTP_HOST = os.environ.get("SMTP_HOST", "").strip()
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
-SMTP_USER = os.environ.get("SMTP_USER", "")
-SMTP_PASS = os.environ.get("SMTP_PASS", "")
-BASE_URL = os.environ.get("BASE_URL", "")
+SMTP_USER = os.environ.get("SMTP_USER", "").strip()
+SMTP_PASS = os.environ.get("SMTP_PASS", "").strip()
+BASE_URL = os.environ.get("BASE_URL", "").strip()
 
 USERS = {}
 AGENTS = {}
@@ -73,7 +73,10 @@ SIDEBAR_ITEMS = [
 def get_base_url():
     if BASE_URL:
         return BASE_URL.rstrip("/")
-    return request.host_url.rstrip("/")
+    try:
+        return request.host_url.rstrip("/")
+    except RuntimeError:
+        return ""
 
 
 def upstream_headers():
@@ -127,18 +130,35 @@ def send_agent_mail(user):
         f"Reject Link: {reject_url}\n"
     )
 
-    if SMTP_HOST and SMTP_USER and SMTP_PASS:
-        try:
-            msg = MIMEText(body)
-            msg["Subject"] = subject
-            msg["From"] = SMTP_USER
-            msg["To"] = agent_email
-            with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-                server.starttls()
+    if not (SMTP_HOST and SMTP_USER and SMTP_PASS):
+        print("SMTP Warning: SMTP_HOST, SMTP_USER, or SMTP_PASS is not configured.")
+        flash("Account created, but SMTP email settings are not configured on server.", "warning")
+        return False
+
+    try:
+        msg = MIMEText(body)
+        msg["Subject"] = subject
+        msg["From"] = SMTP_USER
+        msg["To"] = agent_email
+
+        if SMTP_PORT == 465:
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=15) as server:
                 server.login(SMTP_USER, SMTP_PASS)
                 server.sendmail(SMTP_USER, [agent_email], msg.as_string())
-        except Exception as e:
-            print("SMTP Error:", e)
+        else:
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
+                server.ehlo()
+                server.starttls()
+                server.ehlo()
+                server.login(SMTP_USER, SMTP_PASS)
+                server.sendmail(SMTP_USER, [agent_email], msg.as_string())
+
+        print(f"Agent mail sent successfully to {agent_email}")
+        return True
+    except Exception as e:
+        print("SMTP Error:", repr(e))
+        flash(f"Failed to send email to agent: {e}", "error")
+        return False
 
 
 def user_login_required(f):
@@ -149,7 +169,7 @@ def user_login_required(f):
             return redirect(url_for("login"))
         user = USERS[email]
         if user["status"] != "APPROVED":
-            return render_template("status.html", user=user)
+            return redirect(url_for("account_status"))
         return f(user, *args, **kwargs)
     return decorated
 
@@ -182,6 +202,17 @@ def index():
     if session.get("user_email") in USERS:
         return redirect(url_for("dashboard"))
     return redirect(url_for("login"))
+
+
+@app.route("/status")
+def account_status():
+    email = session.get("user_email")
+    user = USERS.get(email)
+    if not user:
+        return redirect(url_for("login"))
+    if user["status"] == "APPROVED":
+        return redirect(url_for("dashboard"))
+    return render_template("status.html", user=user)
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -221,7 +252,7 @@ def login():
         session.clear()
         session["user_email"] = email
         if user["status"] != "APPROVED":
-            return render_template("status.html", user=user)
+            return redirect(url_for("account_status"))
         return redirect(url_for("dashboard"))
 
     return render_template("login.html")
@@ -266,7 +297,7 @@ def register():
         session["user_email"] = email
 
         send_agent_mail(user)
-        return render_template("status.html", user=user)
+        return redirect(url_for("account_status"))
 
     return render_template("register.html")
 
@@ -288,10 +319,12 @@ def agent_action(agent_email, email, action):
         if action == "approve":
             user["status"] = "APPROVED"
             user["reject_reason"] = ""
+            flash(f"Approved user {email}.", "success")
         elif action == "reject":
             reason = request.form.get("reason", "").strip()
             user["status"] = "REJECTED"
             user["reject_reason"] = reason or "Rejected by Agent."
+            flash(f"Rejected user {email}.", "success")
     return redirect(url_for("agent_panel"))
 
 
@@ -305,11 +338,15 @@ def agent_decision(token):
         return "User not found.", 404
     if request.method == "POST":
         user["status"] = data["action"]
-        user["reject_reason"] = request.form.get("reason", "").strip() or "Rejected by Agent."
+        if data["action"] == "APPROVED":
+            user["reject_reason"] = ""
+        else:
+            user["reject_reason"] = request.form.get("reason", "").strip() or "Rejected by Agent."
         APPROVAL_TOKENS.pop(token, None)
         return f"<h3>Account ({user['email']}) marked as {data['action']}.</h3>"
     if data["action"] == "APPROVED":
         user["status"] = "APPROVED"
+        user["reject_reason"] = ""
         APPROVAL_TOKENS.pop(token, None)
         return f"<h3>Approved!</h3><p>{user['email']} is now APPROVED.</p>"
     return f"""
@@ -323,7 +360,7 @@ def agent_decision(token):
     """
 
 
-# ---------------- ADMIN PANEL (RATES + OTP LOGS + WITHDRAWALS) ----------------
+# ---------------- ADMIN PANEL (USERS + RATES + OTP LOGS + WITHDRAWALS) ----------------
 
 @app.route("/admin")
 @admin_login_required
@@ -338,6 +375,29 @@ def admin_panel():
     )
 
 
+@app.route("/admin/user/<email>/<action>", methods=["POST"])
+@admin_login_required
+def admin_user_action(email, action):
+    user = USERS.get(email)
+    if not user:
+        flash("User not found.", "error")
+        return redirect(url_for("admin_panel"))
+
+    if action == "approve":
+        user["status"] = "APPROVED"
+        user["reject_reason"] = ""
+        flash(f"User {email} approved by Admin.", "success")
+    elif action == "reject":
+        reason = request.form.get("reason", "").strip()
+        user["status"] = "REJECTED"
+        user["reject_reason"] = reason or "Rejected by Admin."
+        flash(f"User {email} rejected by Admin.", "success")
+    else:
+        flash("Invalid action.", "error")
+
+    return redirect(url_for("admin_panel"))
+
+
 @app.route("/admin/set-country-rate", methods=["POST"])
 @admin_login_required
 def set_country_rate():
@@ -350,6 +410,7 @@ def set_country_rate():
 
     if country and rate >= 0:
         COUNTRY_RATES[country] = rate
+        flash(f"Country rate updated for {country}.", "success")
     return redirect(url_for("admin_panel"))
 
 
@@ -365,6 +426,7 @@ def set_service_rate():
 
     if service and rate >= 0:
         SERVICE_RATES[service] = rate
+        flash(f"Service rate updated for {service}.", "success")
     return redirect(url_for("admin_panel"))
 
 
@@ -377,13 +439,14 @@ def decide_withdraw(req_id, decision):
             if decision == "approve":
                 w["status"] = "APPROVED"
                 w["decided_at"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+                flash(f"Withdraw {req_id} approved.", "success")
             elif decision == "reject":
                 w["status"] = "REJECTED"
                 w["reason"] = request.form.get("reason", "").strip() or "Rejected by Admin."
                 w["decided_at"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
                 if user:
-                    # Reject হলে ব্যালেন্স ইউজারের একাউন্টে ফেরত যাবে
                     user["balance"] = round(user["balance"] + w["amount"], 4)
+                flash(f"Withdraw {req_id} rejected and balance refunded.", "success")
             break
     return redirect(url_for("admin_panel"))
 
