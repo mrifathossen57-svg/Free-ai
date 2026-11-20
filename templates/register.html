@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Account Create{% endblock %}
+{% block content %}
+<div class="max-w-md mx-auto mt-10 card rounded-2xl p-6">
+  <h1 class="text-2xl font-bold mb-1">Account Create</h1>
+  <p class="text-sm text-gray-400 mb-6">Fill in your details to send an approval request to the agent.</p>
+
+  <form method="POST" class="space-y-4">
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">User name</label>
+      <input type="text" name="name" required placeholder="Enter user name"
+             class="w-full px-3.5 py-2.5 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-sm focus:outline-none focus:border-emerald-500" />
+    </div>
+
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">Your email</label>
+      <input type="email" name="email" required placeholder="you@example.com"
+             class="w-full px-3.5 py-2.5 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-sm focus:outline-none focus:border-emerald-500" />
+    </div>
+
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">Ajent mail</label>
+      <input type="email" name="agent_email" required placeholder="agent@example.com"
+             class="w-full px-3.5 py-2.5 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-sm focus:outline-none focus:border-emerald-500" />
+    </div>
+
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">Creat Passward</label>
+      <input type="password" name="password" required placeholder="Create password"
+             class="w-full px-3.5 py-2.5 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-sm focus:outline-none focus:border-emerald-500" />
+    </div>
+
+    <button type="submit" class="w-full py-2.5 rounded-xl accent-btn text-white font-semibold text-sm">
+      Account creat
+    </button>
+  </form>
+
+  <p class="text-xs text-gray-400 mt-5 text-center">
+    Already registered? <a href="{{ url_for('login') }}" class="text-emerald-400 hover:underline">Sign In</a>
+  </p>
+</div>
+{% endblock %}
