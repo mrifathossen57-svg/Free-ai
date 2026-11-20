@@ -31,9 +31,11 @@ SMTP_USER = os.environ.get("SMTP_USER", "").strip()
 SMTP_PASS = os.environ.get("SMTP_PASS", "").strip()
 BASE_URL = os.environ.get("BASE_URL", "").strip()
 
+# Admin Switch: ON = Agent mail & auto account creation active, OFF = Account creation blocked
+AGENT_MAIL_AUTO_ACCOUNT = True
+
 USERS = {}
 AGENTS = {}
-APPROVAL_TOKENS = {}
 USER_NUMBERS = {}      # email -> list of allocated numbers
 OTP_EARNING_LOGS = []  # admin ও user লগের জন্য
 WITHDRAWALS = []       # bKash / Nagad withdraw requests
@@ -109,30 +111,21 @@ def detect_service_from_message(msg_text: str) -> str:
 
 def send_agent_mail(user):
     agent_email = user["agent_email"]
-    approve_token = secrets.token_urlsafe(24)
-    reject_token = secrets.token_urlsafe(24)
-    APPROVAL_TOKENS[approve_token] = {"email": user["email"], "action": "APPROVED"}
-    APPROVAL_TOKENS[reject_token] = {"email": user["email"], "action": "REJECTED"}
-
     base = get_base_url()
     login_url = f"{base}/login"
-    approve_url = f"{base}/agent/decision/{approve_token}"
-    reject_url = f"{base}/agent/decision/{reject_token}"
 
-    subject = f"New Account Request: {user['name']} ({user['email']})"
+    subject = f"Auto Account Created: {user['name']} ({user['email']})"
     body = (
-        f"New user account created.\n\n"
+        f"A new user account has been created automatically.\n\n"
         f"User Name: {user['name']}\n"
         f"User Email: {user['email']}\n"
+        f"Status: ACTIVE (Auto)\n"
         f"Created At: {user['created_at']}\n\n"
-        f"Agent Login URL: {login_url}\n"
-        f"Approve Link: {approve_url}\n"
-        f"Reject Link: {reject_url}\n"
+        f"Login URL: {login_url}\n"
     )
 
     if not (SMTP_HOST and SMTP_USER and SMTP_PASS):
         print("SMTP Warning: SMTP_HOST, SMTP_USER, or SMTP_PASS is not configured.")
-        flash("Account created, but SMTP email settings are not configured on server.", "warning")
         return False
 
     try:
@@ -157,7 +150,6 @@ def send_agent_mail(user):
         return True
     except Exception as e:
         print("SMTP Error:", repr(e))
-        flash(f"Failed to send email to agent: {e}", "error")
         return False
 
 
@@ -167,10 +159,7 @@ def user_login_required(f):
         email = session.get("user_email")
         if not email or email not in USERS:
             return redirect(url_for("login"))
-        user = USERS[email]
-        if user["status"] != "APPROVED":
-            return redirect(url_for("account_status"))
-        return f(user, *args, **kwargs)
+        return f(USERS[email], *args, **kwargs)
     return decorated
 
 
@@ -202,17 +191,6 @@ def index():
     if session.get("user_email") in USERS:
         return redirect(url_for("dashboard"))
     return redirect(url_for("login"))
-
-
-@app.route("/status")
-def account_status():
-    email = session.get("user_email")
-    user = USERS.get(email)
-    if not user:
-        return redirect(url_for("login"))
-    if user["status"] == "APPROVED":
-        return redirect(url_for("dashboard"))
-    return render_template("status.html", user=user)
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -251,15 +229,17 @@ def login():
 
         session.clear()
         session["user_email"] = email
-        if user["status"] != "APPROVED":
-            return redirect(url_for("account_status"))
         return redirect(url_for("dashboard"))
 
-    return render_template("login.html")
+    return render_template("login.html", agent_mail_auto_account=AGENT_MAIL_AUTO_ACCOUNT)
 
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
+    if not AGENT_MAIL_AUTO_ACCOUNT:
+        flash("Account creation is currently OFF by Admin.", "error")
+        return redirect(url_for("login"))
+
     if request.method == "POST":
         name = request.form.get("name", "").strip()
         email = request.form.get("email", "").strip().lower()
@@ -281,9 +261,7 @@ def register():
             "email": email,
             "agent_email": agent_email,
             "password_hash": generate_password_hash(password),
-            "status": "PENDING",
-            "reject_reason": "",
-            "request_sms": f"Account creation request from {name} ({email})",
+            "status": "ACTIVE",
             "uid": secrets.token_hex(5).upper(),
             "api_key": f"M{secrets.token_hex(8).upper()}",
             "balance": 0.00,
@@ -297,9 +275,10 @@ def register():
         session["user_email"] = email
 
         send_agent_mail(user)
-        return redirect(url_for("account_status"))
+        flash("Account created automatically! Welcome to Dashboard.", "success")
+        return redirect(url_for("dashboard"))
 
-    return render_template("register.html")
+    return render_template("register.html", agent_mail_auto_account=AGENT_MAIL_AUTO_ACCOUNT)
 
 
 # ---------------- AGENT PANEL ----------------
@@ -311,62 +290,14 @@ def agent_panel(agent_email):
     return render_template("agent_panel.html", agent_email=agent_email, requests_list=requests_list)
 
 
-@app.route("/agent/action/<email>/<action>", methods=["POST"])
-@agent_login_required
-def agent_action(agent_email, email, action):
-    user = USERS.get(email)
-    if user and user["agent_email"] == agent_email:
-        if action == "approve":
-            user["status"] = "APPROVED"
-            user["reject_reason"] = ""
-            flash(f"Approved user {email}.", "success")
-        elif action == "reject":
-            reason = request.form.get("reason", "").strip()
-            user["status"] = "REJECTED"
-            user["reject_reason"] = reason or "Rejected by Agent."
-            flash(f"Rejected user {email}.", "success")
-    return redirect(url_for("agent_panel"))
-
-
-@app.route("/agent/decision/<token>", methods=["GET", "POST"])
-def agent_decision(token):
-    data = APPROVAL_TOKENS.get(token)
-    if not data:
-        return "Invalid or expired approval link.", 404
-    user = USERS.get(data["email"])
-    if not user:
-        return "User not found.", 404
-    if request.method == "POST":
-        user["status"] = data["action"]
-        if data["action"] == "APPROVED":
-            user["reject_reason"] = ""
-        else:
-            user["reject_reason"] = request.form.get("reason", "").strip() or "Rejected by Agent."
-        APPROVAL_TOKENS.pop(token, None)
-        return f"<h3>Account ({user['email']}) marked as {data['action']}.</h3>"
-    if data["action"] == "APPROVED":
-        user["status"] = "APPROVED"
-        user["reject_reason"] = ""
-        APPROVAL_TOKENS.pop(token, None)
-        return f"<h3>Approved!</h3><p>{user['email']} is now APPROVED.</p>"
-    return f"""
-    <body style="background:#0b0e0c;color:#fff;font-family:sans-serif;padding:40px;">
-      <h2>Reject Account: {user['email']}</h2>
-      <form method="POST">
-        <input type="text" name="reason" placeholder="Reason" style="padding:10px;width:280px;">
-        <button type="submit" style="padding:10px 18px;background:#dc2626;color:#fff;border:none;">Confirm Reject</button>
-      </form>
-    </body>
-    """
-
-
-# ---------------- ADMIN PANEL (USERS + RATES + OTP LOGS + WITHDRAWALS) ----------------
+# ---------------- ADMIN PANEL (SWITCH + RATES + OTP LOGS + WITHDRAWALS) ----------------
 
 @app.route("/admin")
 @admin_login_required
 def admin_panel():
     return render_template(
         "admin_panel.html",
+        agent_mail_auto_account=AGENT_MAIL_AUTO_ACCOUNT,
         country_rates=COUNTRY_RATES,
         service_rates=SERVICE_RATES,
         otp_logs=OTP_EARNING_LOGS,
@@ -375,26 +306,13 @@ def admin_panel():
     )
 
 
-@app.route("/admin/user/<email>/<action>", methods=["POST"])
+@app.route("/admin/toggle-agent-mail-account", methods=["POST"])
 @admin_login_required
-def admin_user_action(email, action):
-    user = USERS.get(email)
-    if not user:
-        flash("User not found.", "error")
-        return redirect(url_for("admin_panel"))
-
-    if action == "approve":
-        user["status"] = "APPROVED"
-        user["reject_reason"] = ""
-        flash(f"User {email} approved by Admin.", "success")
-    elif action == "reject":
-        reason = request.form.get("reason", "").strip()
-        user["status"] = "REJECTED"
-        user["reject_reason"] = reason or "Rejected by Admin."
-        flash(f"User {email} rejected by Admin.", "success")
-    else:
-        flash("Invalid action.", "error")
-
+def toggle_agent_mail_account():
+    global AGENT_MAIL_AUTO_ACCOUNT
+    AGENT_MAIL_AUTO_ACCOUNT = not AGENT_MAIL_AUTO_ACCOUNT
+    state = "ON (Auto Account Creation Active)" if AGENT_MAIL_AUTO_ACCOUNT else "OFF (Account Creation Disabled)"
+    flash(f"Agent Mail Auto Account is now {state}.", "success")
     return redirect(url_for("admin_panel"))
 
 
