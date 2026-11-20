@@ -5,8 +5,8 @@ from google.genai import types
 
 app = Flask(__name__)
 
-# Railway-এর Variables থেকে নেবে, না পেলে কোডে দেওয়া Key ব্যবহার করবে
-API_KEY = os.environ.get("GEMINI_API_KEY") or "AQ.Ab8RN6LHX4rF_tCaWdi-Vnn7IuzU3uP23G3wpwT7yQJlw4ErJQ"
+# Railway-এর Variables থেকে নেবে, না পেলে কোডে দেওয়া নতুন Key ব্যবহার করবে
+API_KEY = os.environ.get("GEMINI_API_KEY") or "AQ.Ab8RN6IBrKk8rWfqmSWPt4lwX9SpAAZrr8PUbefFesQEhRuWXw"
 
 client = genai.Client(api_key=API_KEY)
 
