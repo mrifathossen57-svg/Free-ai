@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}SMS Panel{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background-color: #0b0e0c; color: #e6ece8; }
+    .card { background-color: #121614; border: 1px solid #202824; }
+    .accent-btn { background-color: #16a34a; }
+    .accent-btn:hover { background-color: #15803d; }
+  </style>
+</head>
+<body class="min-h-screen flex">
+  {% if user and user.status == 'APPROVED' %}
+  <aside id="sidebar" class="w-64 bg-[#101412] border-r border-[#1e2622] flex flex-col justify-between p-4 fixed md:static inset-y-0 left-0 z-40 transform -translate-x-full md:translate-x-0 transition-transform">
+    <div>
+      <div class="flex items-center gap-2 px-2 py-3 mb-4">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-400 to-cyan-500 flex items-center justify-center font-bold text-black">V</div>
+        <span class="font-extrabold tracking-wide text-lg">SMS PANEL</span>
+      </div>
+
+      <nav class="space-y-1 text-sm">
+        {% set current_group = namespace(val='__none__') %}
+        {% for item in sidebar_items %}
+          {% if item.group and item.group != current_group.val and item.group != 'Extra' %}
+            {% set current_group.val = item.group %}
+            <div class="pt-4 pb-1 px-3 text-xs font-semibold text-gray-500 uppercase">{{ item.group }}</div>
+          {% endif %}
+          {% if item.key not in ['tweaks', 'api-docs'] %}
+            <a href="{{ url_for('dashboard') if item.key == 'dashboard' else url_for('section_page', section_key=item.key) }}"
+               class="flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium transition {{ 'bg-emerald-600 text-white' if active == item.key else 'text-gray-300 hover:bg-[#19201c]' }}">
+              <span>{{ item.label }}</span>
+            </a>
+          {% endif %}
+        {% endfor %}
+
+        <div class="pt-4 space-y-2">
+          <a href="{{ url_for('section_page', section_key='tweaks') }}"
+             class="block px-3 py-2 rounded-xl card text-gray-300 hover:border-emerald-500/50">⚙ Tweaks</a>
+          <a href="{{ url_for('section_page', section_key='api-docs') }}"
+             class="block px-3 py-2.5 rounded-xl bg-emerald-950/60 border border-emerald-700/40 text-emerald-300 font-semibold">
+            &lt;/&gt; API Documentation
+          </a>
+        </div>
+      </nav>
+    </div>
+
+    <div class="pt-4 border-t border-[#1e2622]">
+      <a href="{{ url_for('logout') }}" class="block px-3 py-2 rounded-xl text-rose-400 hover:bg-rose-950/30 text-sm font-medium">
+        → Logout
+      </a>
+    </div>
+  </aside>
+  {% endif %}
+
+  <div class="flex-1 flex flex-col min-w-0">
+    {% if user and user.status == 'APPROVED' %}
+    <header class="h-14 border-b border-[#1e2622] bg-[#101412] px-4 flex items-center justify-between">
+      <button onclick="document.getElementById('sidebar').classList.toggle('-translate-x-full')" class="md:hidden px-3 py-1.5 rounded-lg bg-[#181f1b] text-sm">
+        ☰ Menu
+      </button>
+      <div class="text-xs text-gray-400 ml-auto">UID: <span class="text-emerald-400 font-mono">{{ user.uid }}</span></div>
+    </header>
+    {% endif %}
+
+    <main class="p-4 md:p-6 flex-1">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          {% for category, msg in messages %}
+            <div class="mb-4 p-3 rounded-xl bg-rose-950/60 border border-rose-700/50 text-rose-200 text-sm">{{ msg }}</div>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</body>
+  </html>
