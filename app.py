@@ -5,10 +5,8 @@ from google.genai import types
 
 app = Flask(__name__)
 
-# Railway-এর Variables ট্যাবে GEMINI_API_KEY নামে Key সেট করতে হবে
-API_KEY = os.environ.get("GEMINI_API_KEY")
-if not API_KEY:
-    raise RuntimeError("GEMINI_API_KEY Environment Variable সেট করা নেই!")
+# Railway-এর Variables থেকে নেবে, না পেলে কোডে দেওয়া Key ব্যবহার করবে
+API_KEY = os.environ.get("GEMINI_API_KEY") or "AQ.Ab8RN6LHX4rF_tCaWdi-Vnn7IuzU3uP23G3wpwT7yQJlw4ErJQ"
 
 client = genai.Client(api_key=API_KEY)
 
@@ -18,6 +16,8 @@ SYSTEM_PROMPT = """
 ইউজার বাংলায় লিখলে সাবলীল বাংলায়, ইংরেজিতে লিখলে ইংরেজিতে, আর বাংলিশে লিখলে সহজ বাংলায় উত্তর দেবে।
 দরকার হলে পয়েন্ট বা ছোট উদাহরণ দিয়ে বুঝিয়ে বলবে, অযথা কথা বাড়াবে না।
 """
+
+MODELS = ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
 
 @app.route("/")
 def home():
@@ -46,20 +46,28 @@ def chat():
     if not contents:
         return jsonify({"error": "মেসেজ খালি রাখা যাবে না।"}), 400
 
-    try:
-        response = client.models.generate_content(
-            model="gemini-3.8-flash",
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                temperature=0.7,
-            ),
-        )
-        reply_text = response.text or "দুঃখিত, এই মুহূর্তে উত্তর তৈরি করা সম্ভব হয়নি।"
-        return jsonify({"reply": reply_text})
+    last_error = None
+    for model_name in MODELS:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    temperature=0.7,
+                ),
+            )
+            reply_text = response.text or "দুঃখিত, এই মুহূর্তে উত্তর তৈরি করা সম্ভব হয়নি।"
+            return jsonify({"reply": reply_text})
 
-    except Exception as e:
-        return jsonify({"error": f"API এরর: {str(e)}"}), 500
+        except Exception as e:
+            last_error = e
+            err_str = str(e)
+            if "503" in err_str or "UNAVAILABLE" in err_str or "high demand" in err_str.lower():
+                continue
+            break
+
+    return jsonify({"error": f"API এরর: {str(last_error)}"}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
