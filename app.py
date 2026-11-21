@@ -42,21 +42,22 @@ SMTP_PASS = os.environ.get("SMTP_PASS", "").strip()
 BASE_URL = os.environ.get("BASE_URL", "").strip()
 
 DEFAULT_COUNTRY_RATES = {
-    "United Kingdom": 0.05,
-    "Guinea": 0.10,
-    "Ivory Coast": 0.05,
-    "Bangladesh": 0.08,
-    "Default": 0.05,
+    "United Kingdom": 0.0032,
+    "Guinea": 0.0032,
+    "Ivory Coast": 0.0032,
+    "Bangladesh": 0.0032,
+    "Default": 0.0032,
 }
 
 DEFAULT_SERVICE_RATES = {
-    "WhatsApp": 0.05,
-    "Facebook": 0.02,
-    "TikTok": 0.12,
-    "Telegram": 0.15,
+    "WhatsApp": 0.0032,
+    "Facebook": 0.0032,
+    "TikTok": 0.0032,
+    "Telegram": 0.0032,
 }
 
 NUMBER_TTL_SECONDS = 15 * 60
+LIVEACCESS_TTL_SECONDS = 5 * 60 * 60
 MAX_ACCOUNTS_PER_AGENT = 200
 
 SIDEBAR_ITEMS = [
@@ -106,6 +107,7 @@ def init_db():
             status TEXT NOT NULL DEFAULT 'ACTIVE',
             uid TEXT NOT NULL,
             api_key TEXT,
+            api_enabled INTEGER NOT NULL DEFAULT 0,
             api_key_created TEXT,
             member_since TEXT,
             last_login TEXT,
@@ -115,6 +117,10 @@ def init_db():
             created_at TEXT NOT NULL
         )
     """)
+
+    user_cols = [r["name"] for r in cur.execute("PRAGMA table_info(users)").fetchall()]
+    if "api_enabled" not in user_cols:
+        cur.execute("ALTER TABLE users ADD COLUMN api_enabled INTEGER NOT NULL DEFAULT 0")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS user_numbers (
@@ -213,7 +219,17 @@ def init_db():
         )
     """)
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS liveaccess_seen (
+            sid TEXT NOT NULL,
+            range_val TEXT NOT NULL,
+            first_seen_ts REAL NOT NULL,
+            PRIMARY KEY (sid, range_val)
+        )
+    """)
+
     cur.execute("INSERT OR IGNORE INTO settings (k, v) VALUES ('agent_mail_auto_account', '1')")
+    cur.execute("INSERT OR IGNORE INTO settings (k, v) VALUES ('voltx_panel_active', '1')")
 
     for c, r in DEFAULT_COUNTRY_RATES.items():
         cur.execute("INSERT OR IGNORE INTO country_rates (country, rate) VALUES (?, ?)", (c, r))
@@ -236,6 +252,23 @@ def set_auto_account_flag(enabled: bool):
     conn = get_db()
     conn.execute(
         "INSERT OR REPLACE INTO settings (k, v) VALUES ('agent_mail_auto_account', ?)",
+        ("1" if enabled else "0",)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_voltx_panel_flag() -> bool:
+    conn = get_db()
+    row = conn.execute("SELECT v FROM settings WHERE k = 'voltx_panel_active'").fetchone()
+    conn.close()
+    return (row["v"] == "1") if row else True
+
+
+def set_voltx_panel_flag(enabled: bool):
+    conn = get_db()
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (k, v) VALUES ('voltx_panel_active', ?)",
         ("1" if enabled else "0",)
     )
     conn.commit()
@@ -279,7 +312,11 @@ def get_user_dict(email: str):
     conn = get_db()
     row = conn.execute("SELECT * FROM users WHERE email = ?", (email.lower(),)).fetchone()
     conn.close()
-    return dict(row) if row else None
+    if not row:
+        return None
+    u = dict(row)
+    u["api_key_visible"] = u.get("api_key") if int(u.get("api_enabled") or 0) else None
+    return u
 
 
 def get_all_users_dict() -> dict:
@@ -422,7 +459,7 @@ def send_agent_mail(user: dict):
     return send_email_smtp(agent_email, subject, body)
 
 
-# ---------------- LOGIN GUARDS ----------------
+# ---------------- LOGIN & PUBLIC API GUARDS ----------------
 
 def user_login_required(f):
     @wraps(f)
@@ -462,6 +499,50 @@ def admin_login_required(f):
             flash("Admin login required.", "error")
             return redirect(url_for("login"))
         return f(*args, **kwargs)
+    return decorated
+
+
+def public_api_key_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        supplied_key = (
+            request.headers.get("X-API-Key")
+            or request.headers.get("mauthapi")
+            or request.args.get("api_key")
+            or ((request.get_json(silent=True) or {}).get("api_key") if request.is_json else "")
+            or ""
+        ).strip()
+
+        if not supplied_key:
+            return jsonify({
+                "meta": {"code": 401, "status": "unauthorized"},
+                "message": "API key is missing. Pass mauthapi header."
+            }), 401
+
+        conn = get_db()
+        row = conn.execute("SELECT * FROM users WHERE api_key = ?", (supplied_key,)).fetchone()
+        conn.close()
+
+        if not row:
+            return jsonify({
+                "meta": {"code": 403, "status": "forbidden"},
+                "message": "Invalid API key."
+            }), 403
+
+        user = dict(row)
+        if user["status"] != "ACTIVE":
+            return jsonify({
+                "meta": {"code": 403, "status": "forbidden"},
+                "message": f"Account status is {user['status']}."
+            }), 403
+
+        if not int(user.get("api_enabled") or 0):
+            return jsonify({
+                "meta": {"code": 403, "status": "forbidden"},
+                "message": "API permission is not enabled for this account. Contact your Agent."
+            }), 403
+
+        return f(user, *args, **kwargs)
     return decorated
 
 
@@ -576,6 +657,7 @@ def register():
             "status": status,
             "uid": secrets.token_hex(5).upper(),
             "api_key": f"M{secrets.token_hex(6).upper()}",
+            "api_enabled": 0,
             "api_key_created": now_str,
             "member_since": now_dt.strftime("%b %Y"),
             "last_login": now_str,
@@ -589,15 +671,15 @@ def register():
         conn.execute("""
             INSERT INTO users (
                 email, name, agent_email, password_hash, status, uid, api_key,
-                api_key_created, member_since, last_login, balance, lifetime_earning,
-                otp_count, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                api_enabled, api_key_created, member_since, last_login, balance,
+                lifetime_earning, otp_count, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             user_data["email"], user_data["name"], user_data["agent_email"],
             user_data["password_hash"], user_data["status"], user_data["uid"],
-            user_data["api_key"], user_data["api_key_created"], user_data["member_since"],
-            user_data["last_login"], user_data["balance"], user_data["lifetime_earning"],
-            user_data["otp_count"], user_data["created_at"]
+            user_data["api_key"], user_data["api_enabled"], user_data["api_key_created"],
+            user_data["member_since"], user_data["last_login"], user_data["balance"],
+            user_data["lifetime_earning"], user_data["otp_count"], user_data["created_at"]
         ))
         conn.commit()
         conn.close()
@@ -734,6 +816,47 @@ def agent_panel(agent_email):
     )
 
 
+@app.route("/agent/api-permission", methods=["POST"])
+@agent_login_required
+def agent_api_permission(agent_email):
+    user_email = request.form.get("user_email", "").strip().lower()
+    mode = request.form.get("mode", "enable").strip().lower()
+
+    if not user_email:
+        flash("Please enter a user account email.", "error")
+        return redirect(url_for("agent_panel"))
+
+    user = get_user_dict(user_email)
+    if not user:
+        flash(f"No user account found with email '{user_email}'.", "error")
+        return redirect(url_for("agent_panel"))
+
+    if user["agent_email"] != agent_email:
+        flash(f"User '{user_email}' is not under your agent email.", "error")
+        return redirect(url_for("agent_panel"))
+
+    now_str = datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
+    conn = get_db()
+
+    if mode == "disable":
+        conn.execute("UPDATE users SET api_enabled = 0 WHERE email = ?", (user_email,))
+        conn.commit()
+        conn.close()
+        flash(f"API permission disabled for {user_email}.", "success")
+    else:
+        api_key = user.get("api_key") or f"M{secrets.token_hex(6).upper()}"
+        api_created = user.get("api_key_created") or now_str
+        conn.execute(
+            "UPDATE users SET api_enabled = 1, api_key = ?, api_key_created = ? WHERE email = ?",
+            (api_key, api_created, user_email)
+        )
+        conn.commit()
+        conn.close()
+        flash(f"API permission active for {user_email}! API Key is now visible in user's Profile.", "success")
+
+    return redirect(url_for("agent_panel"))
+
+
 @app.route("/agent/decide-user", methods=["POST"])
 @agent_login_required
 def agent_decide_user(agent_email):
@@ -854,6 +977,7 @@ def admin_panel():
     return render_template(
         "admin_panel.html",
         agent_mail_auto_account=get_auto_account_flag(),
+        voltx_panel_active=get_voltx_panel_flag(),
         country_rates=get_country_rates(),
         service_rates=get_service_rates(),
         otp_rate_limits=get_otp_rate_limits(),
@@ -864,6 +988,16 @@ def admin_panel():
         agent_account_counts=agent_account_counts,
         max_accounts_per_agent=MAX_ACCOUNTS_PER_AGENT,
     )
+
+
+@app.route("/admin/toggle-voltx-panel", methods=["POST"])
+@admin_login_required
+def toggle_voltx_panel():
+    new_state = not get_voltx_panel_flag()
+    set_voltx_panel_flag(new_state)
+    state_text = "ON" if new_state else "OFF"
+    flash(f"Voltx Panel is now {state_text}.", "success")
+    return redirect(url_for("admin_panel"))
 
 
 @app.route("/admin/add-agent", methods=["POST"])
@@ -1001,12 +1135,18 @@ def decide_withdraw(req_id, decision):
 @app.route("/api/profile/api-key/<action>", methods=["POST"])
 @user_login_required
 def manage_user_api_key(user, action):
+    if not int(user.get("api_enabled") or 0):
+        return jsonify({
+            "ok": False,
+            "message": "API permission is not enabled for your account. Ask your Agent to click API Permission."
+        }), 403
+
     now_str = datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
     conn = get_db()
     if action == "regenerate":
         new_key = f"M{secrets.token_hex(6).upper()}"
         conn.execute(
-            "UPDATE users SET api_key = ?, api_key_created = ? WHERE email = ?",
+            "UPDATE users SET api_key = ?, api_enabled = 1, api_key_created = ? WHERE email = ?",
             (new_key, now_str, user["email"])
         )
         conn.commit()
@@ -1018,7 +1158,7 @@ def manage_user_api_key(user, action):
             "message": "New API key generated successfully."
         })
     elif action == "revoke":
-        conn.execute("UPDATE users SET api_key = NULL WHERE email = ?", (user["email"],))
+        conn.execute("UPDATE users SET api_key = NULL, api_enabled = 0 WHERE email = ?", (user["email"],))
         conn.commit()
         conn.close()
         return jsonify({
@@ -1030,37 +1170,12 @@ def manage_user_api_key(user, action):
     return jsonify({"ok": False, "message": "Invalid action."}), 400
 
 
-# ---------------- BRIDGE & OTP EARNING LOGIC ----------------
+# ---------------- SHARED NUMBER & OTP LOGIC ----------------
 
-@app.route("/api/bridge/console")
-@user_login_required
-def bridge_console(user):
-    try:
-        r = requests.get(CONSOLE_API_URL, headers=upstream_headers(), timeout=10)
-        return jsonify(r.json())
-    except Exception as e:
-        return jsonify({"meta": {"code": 500, "status": "error"}, "message": str(e), "data": {"hits": []}})
-
-
-@app.route("/api/bridge/liveaccess")
-@user_login_required
-def bridge_liveaccess(user):
-    try:
-        r = requests.get(LIVEACCESS_API_URL, headers=upstream_headers(), timeout=10)
-        return jsonify(r.json())
-    except Exception as e:
-        return jsonify({"meta": {"code": 500, "status": "error"}, "message": str(e), "data": {"services": []}})
-
-
-@app.route("/api/bridge/getnum", methods=["POST"])
-@user_login_required
-def bridge_getnum(user):
-    payload = request.get_json(silent=True) or {}
-    raw_range = str(payload.get("range", "")).strip()
-    clean_rid = raw_range.upper().replace("X", "").replace("+", "").strip()
-
+def _create_number_for_user(user_dict: dict, raw_range: str):
+    clean_rid = str(raw_range or "").upper().replace("X", "").replace("+", "").strip()
     if not clean_rid:
-        return jsonify({"ok": False, "message": "Please enter a valid range."})
+        return {"ok": False, "message": "Please enter a valid range."}
 
     try:
         r = requests.post(
@@ -1071,17 +1186,17 @@ def bridge_getnum(user):
         )
         res_json = r.json()
     except Exception as e:
-        return jsonify({"ok": False, "message": f"Upstream API Error: {e}"})
+        return {"ok": False, "message": f"Upstream API Error: {e}"}
 
     if res_json.get("meta", {}).get("code") != 200 or not res_json.get("data"):
-        return jsonify({"ok": False, "message": res_json.get("message", "Out of stock or invalid range.")})
+        return {"ok": False, "message": res_json.get("message", "Out of stock or invalid range.")}
 
     data = res_json["data"]
     country = data.get("country", "Default")
     now = time.time()
     num_id = secrets.token_hex(6)
-    range_str = raw_range or f"{clean_rid}XXX"
-    rate_val = calculate_rate(country, "", user.get("agent_email", ""))
+    range_str = str(raw_range).strip() or f"{clean_rid}XXX"
+    rate_val = calculate_rate(country, "", user_dict.get("agent_email", ""))
 
     entry = {
         "id": num_id,
@@ -1105,24 +1220,22 @@ def bridge_getnum(user):
             country, operator, country_rate, created_ts, expires_ts, otp_message, earned_amount
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        num_id, user["email"], range_str, entry["full_number"], entry["national_number"],
+        num_id, user_dict["email"], range_str, entry["full_number"], entry["national_number"],
         entry["no_plus_number"], country, entry["operator"], rate_val,
         entry["created_at"], entry["expires_at"], None, 0.0
     ))
     conn.commit()
     conn.close()
 
-    return jsonify({"ok": True, "item": entry})
+    return {"ok": True, "item": entry}
 
 
-@app.route("/api/bridge/my-numbers")
-@user_login_required
-def bridge_my_numbers(user):
+def _fetch_user_numbers_and_sync_otp(user_dict: dict):
     now = time.time()
     conn = get_db()
     rows = conn.execute(
         "SELECT * FROM user_numbers WHERE user_email = ? ORDER BY created_ts DESC",
-        (user["email"],)
+        (user_dict["email"],)
     ).fetchall()
     items = [dict(r) for r in rows]
 
@@ -1142,7 +1255,7 @@ def bridge_my_numbers(user):
                     if otp_num.endswith(num_clean) or num_clean.endswith(otp_num):
                         msg_text = otp.get("message", "")
                         service_sid = detect_service_from_message(msg_text)
-                        rate_used = calculate_rate(it["country"], service_sid, user.get("agent_email", ""))
+                        rate_used = calculate_rate(it["country"], service_sid, user_dict.get("agent_email", ""))
                         now_utc = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
                         it["otp_message"] = msg_text
@@ -1158,7 +1271,7 @@ def bridge_my_numbers(user):
                                    lifetime_earning = ROUND(lifetime_earning + ?, 4),
                                    otp_count = otp_count + 1
                                WHERE email = ?""",
-                            (rate_used, rate_used, user["email"])
+                            (rate_used, rate_used, user_dict["email"])
                         )
                         conn.execute(
                             """INSERT INTO otp_logs (
@@ -1166,7 +1279,7 @@ def bridge_my_numbers(user):
                                 number_val, country, service, rate, message
                             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                             (
-                                now_utc, now, user["email"], user["agent_email"],
+                                now_utc, now, user_dict["email"], user_dict["agent_email"],
                                 it["full_number"], it["country"], service_sid, rate_used, msg_text
                             )
                         )
@@ -1175,8 +1288,8 @@ def bridge_my_numbers(user):
         except Exception:
             pass
 
-    fresh_user = get_user_dict(user["email"])
-    current_balance = float(fresh_user["balance"]) if fresh_user else float(user["balance"])
+    fresh_user = get_user_dict(user_dict["email"])
+    current_balance = float(fresh_user["balance"]) if fresh_user else float(user_dict["balance"])
     conn.close()
 
     formatted = []
@@ -1200,7 +1313,174 @@ def bridge_my_numbers(user):
             "balance": current_balance,
         })
 
+    return formatted, current_balance
+
+
+# ---------------- SESSION BRIDGE ENDPOINTS ----------------
+
+def _filter_liveaccess_5h(payload):
+    now = time.time()
+    cutoff = now - LIVEACCESS_TTL_SECONDS
+    raw_services = ((payload or {}).get("data") or {}).get("services") or []
+
+    conn = get_db()
+    conn.execute("DELETE FROM liveaccess_seen WHERE first_seen_ts < ?", (cutoff,))
+
+    filtered_services = []
+    for svc in raw_services:
+        sid = str(svc.get("sid") or "SERVICE")
+        last_at = svc.get("last_at")
+
+        if last_at:
+            try:
+                ts_val = float(last_at)
+                if ts_val > 1e12:
+                    ts_val /= 1000.0
+                if (now - ts_val) > LIVEACCESS_TTL_SECONDS:
+                    continue
+            except (ValueError, TypeError):
+                try:
+                    dt_val = datetime.fromisoformat(str(last_at).replace("Z", "+00:00"))
+                    if (now - dt_val.timestamp()) > LIVEACCESS_TTL_SECONDS:
+                        continue
+                except Exception:
+                    pass
+
+        valid_ranges = []
+        for rng in (svc.get("ranges") or []):
+            rng_str = str(rng).strip()
+            if not rng_str:
+                continue
+            row = conn.execute(
+                "SELECT first_seen_ts FROM liveaccess_seen WHERE sid = ? AND range_val = ?",
+                (sid, rng_str)
+            ).fetchone()
+            if row:
+                if float(row["first_seen_ts"]) >= cutoff:
+                    valid_ranges.append(rng_str)
+            else:
+                conn.execute(
+                    "INSERT OR REPLACE INTO liveaccess_seen (sid, range_val, first_seen_ts) VALUES (?, ?, ?)",
+                    (sid, rng_str, now)
+                )
+                valid_ranges.append(rng_str)
+
+        if valid_ranges:
+            new_svc = dict(svc)
+            new_svc["ranges"] = valid_ranges
+            filtered_services.append(new_svc)
+
+    conn.commit()
+    conn.close()
+
+    if not isinstance(payload, dict):
+        payload = {"meta": {"code": 200, "status": "success"}, "data": {}}
+    if not isinstance(payload.get("data"), dict):
+        payload["data"] = {}
+    payload["data"]["services"] = filtered_services
+    return payload
+
+
+@app.route("/api/bridge/console")
+@user_login_required
+def bridge_console(user):
+    if not get_voltx_panel_flag():
+        return jsonify({
+            "meta": {"code": 503, "status": "off"},
+            "voltx_active": False,
+            "message": "Voltx Panel is currently OFF by Admin.",
+            "data": {"hits": []}
+        })
+    try:
+        r = requests.get(CONSOLE_API_URL, headers=upstream_headers(), timeout=10)
+        res = r.json()
+        if isinstance(res, dict):
+            res["voltx_active"] = True
+        return jsonify(res)
+    except Exception as e:
+        return jsonify({"meta": {"code": 500, "status": "error"}, "voltx_active": True, "message": str(e), "data": {"hits": []}})
+
+
+@app.route("/api/bridge/liveaccess")
+@user_login_required
+def bridge_liveaccess(user):
+    try:
+        r = requests.get(LIVEACCESS_API_URL, headers=upstream_headers(), timeout=10)
+        return jsonify(_filter_liveaccess_5h(r.json()))
+    except Exception as e:
+        return jsonify({"meta": {"code": 500, "status": "error"}, "message": str(e), "data": {"services": []}})
+
+
+@app.route("/api/bridge/getnum", methods=["POST"])
+@user_login_required
+def bridge_getnum(user):
+    payload = request.get_json(silent=True) or {}
+    raw_range = str(payload.get("range", "")).strip()
+    return jsonify(_create_number_for_user(user, raw_range))
+
+
+@app.route("/api/bridge/my-numbers")
+@user_login_required
+def bridge_my_numbers(user):
+    formatted, current_balance = _fetch_user_numbers_and_sync_otp(user)
     return jsonify({"ok": True, "numbers": formatted, "balance": current_balance})
+
+
+# ---------------- PUBLIC / USER API v1 ENDPOINTS ----------------
+
+@app.route("/api/v1/liveaccess", methods=["GET"])
+@public_api_key_required
+def api_v1_liveaccess(user):
+    try:
+        r = requests.get(LIVEACCESS_API_URL, headers=upstream_headers(), timeout=10)
+        return jsonify(_filter_liveaccess_5h(r.json()))
+    except Exception as e:
+        return jsonify({"meta": {"code": 500, "status": "error"}, "message": str(e), "data": {"services": []}}), 500
+
+
+@app.route("/api/v1/getnum", methods=["POST"])
+@public_api_key_required
+def api_v1_getnum(user):
+    payload = request.get_json(silent=True) or request.form.to_dict() or {}
+    raw_range = str(payload.get("range") or payload.get("rid") or "").strip()
+    res = _create_number_for_user(user, raw_range)
+    if not res.get("ok"):
+        return jsonify({"meta": {"code": 400, "status": "error"}, "message": res.get("message")}), 400
+    return jsonify({"meta": {"code": 200, "status": "success"}, "data": res["item"]})
+
+
+@app.route("/api/v1/my-numbers", methods=["GET"])
+@public_api_key_required
+def api_v1_my_numbers(user):
+    formatted, current_balance = _fetch_user_numbers_and_sync_otp(user)
+    return jsonify({
+        "meta": {"code": 200, "status": "success"},
+        "data": {
+            "numbers": formatted,
+            "balance": current_balance,
+        }
+    })
+
+
+@app.route("/api/v1/console", methods=["GET"])
+@public_api_key_required
+def api_v1_console(user):
+    if not get_voltx_panel_flag():
+        return jsonify({
+            "meta": {"code": 503, "status": "off"},
+            "message": "Voltx Panel is currently OFF.",
+            "data": {"hits": []}
+        }), 503
+    conn = get_db()
+    logs = [dict(r) for r in conn.execute(
+        "SELECT id, created_at, number_val, country, service, rate, message FROM otp_logs WHERE user_email = ? ORDER BY id DESC LIMIT 100",
+        (user["email"],)
+    ).fetchall()]
+    conn.close()
+    return jsonify({
+        "meta": {"code": 200, "status": "success"},
+        "data": {"hits": logs}
+    })
 
 
 # ---------------- USER PAYMENT (Saved Addresses & Withdraw) ----------------
@@ -1311,7 +1591,22 @@ def payment_page(user):
     )
 
 
-# ---------------- PANEL PAGES ----------------
+# ---------------- PANEL PAGES & PUBLIC API DOCS ----------------
+
+@app.route("/api-docs")
+@app.route("/api-docs.html")
+def public_api_docs():
+    email = session.get("user_email")
+    user = get_user_dict(email) if email else None
+    return render_template(
+        "api_docs.html",
+        user=user,
+        sidebar_items=SIDEBAR_ITEMS,
+        active="api-docs",
+        base_path=f"{get_base_url()}/api/v1",
+        public_docs=True,
+    )
+
 
 @app.route("/dashboard")
 @user_login_required
@@ -1324,6 +1619,8 @@ def dashboard(user):
 def section_page(user, section_key):
     if section_key == "payment":
         return redirect(url_for("payment_page"))
+    if section_key == "api-docs":
+        return redirect(url_for("public_api_docs"))
 
     valid = {item["key"]: item for item in SIDEBAR_ITEMS}
     if section_key not in valid:
@@ -1334,11 +1631,15 @@ def section_page(user, section_key):
     if section_key == "get-number":
         return render_template("get_number.html", user=user, sidebar_items=SIDEBAR_ITEMS, active="get-number")
     if section_key == "console":
-        return render_template("console.html", user=user, sidebar_items=SIDEBAR_ITEMS, active="console")
+        return render_template(
+            "console.html",
+            user=user,
+            sidebar_items=SIDEBAR_ITEMS,
+            active="console",
+            voltx_panel_active=get_voltx_panel_flag(),
+        )
     if section_key == "access-list":
         return render_template("access_list.html", user=user, sidebar_items=SIDEBAR_ITEMS, active=section_key, section=valid[section_key])
-    if section_key == "api-docs":
-        return render_template("api_docs.html", user=user, sidebar_items=SIDEBAR_ITEMS, active="api-docs", base_path=f"{get_base_url()}/api/v1")
 
     return render_template("section.html", user=user, sidebar_items=SIDEBAR_ITEMS, active=section_key, section=valid[section_key])
 
