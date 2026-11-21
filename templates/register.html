@@ -1,11 +1,27 @@
 {% extends "base.html" %}
-{% block title %}Account Create{% endblock %}
+{% block title %}Account Create siam{% endblock %}
 {% block content %}
 <div class="max-w-md mx-auto mt-10 card rounded-2xl p-6">
-  <h1 class="text-2xl font-bold mb-1">Account Create</h1>
-  <p class="text-sm text-gray-400 mb-6">Fill in your details to send an approval request to the agent.</p>
+  <h1 class="text-2xl font-bold mb-1">Account Create siam</h1>
+  {% if agent_mail_auto_account %}
+    <p class="text-sm text-gray-400 mb-6">Fill in your details. Using a valid agent mail will activate your account automatically.</p>
+  {% else %}
+    <p class="text-sm text-gray-400 mb-6">Fill in your details to send an approval request under the selected agent mail.</p>
+  {% endif %}
 
-  <form method="POST" class="space-y-4">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="space-y-2 mb-4">
+        {% for category, msg in messages %}
+          <div class="px-3.5 py-2.5 rounded-xl text-xs font-semibold {% if category == 'error' %}bg-rose-500/15 text-rose-400 border border-rose-500/30{% else %}bg-emerald-500/15 text-emerald-400 border border-emerald-500/30{% endif %}">
+            {{ msg }}
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+
+  <form method="POST" action="{{ url_for('register') }}" class="space-y-4">
     <div>
       <label class="block text-xs text-gray-400 mb-1">User name</label>
       <input type="text" name="name" required placeholder="Enter user name"
