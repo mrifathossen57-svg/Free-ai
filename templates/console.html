@@ -2,6 +2,7 @@
 {% block title %}Live Console{% endblock %}
 {% block content %}
 {% set is_voltx_on = voltx_panel_active if voltx_panel_active is defined else true %}
+{% set panel_name = panel_brand_name if panel_brand_name is defined else "SR 1" %}
 
 <div class="flex items-center justify-between mb-6">
   <div>
@@ -10,7 +11,7 @@
       {% if is_voltx_on %}
         Global live feed of recent hits (Auto-refresh every 5s)
       {% else %}
-        Voltx Panel is currently turned OFF by Admin
+        {{ panel_name }} Panel is currently turned OFF by Admin
       {% endif %}
     </p>
   </div>
@@ -23,7 +24,7 @@
 
 {% if not is_voltx_on %}
   <div class="card rounded-2xl p-6 border border-rose-700/40 bg-rose-950/20 space-y-1">
-    <h2 class="text-base font-bold text-rose-300">Voltx Panel is OFF</h2>
+    <h2 class="text-base font-bold text-rose-300">{{ panel_name }} Panel is OFF</h2>
     <p class="text-xs text-gray-400">This panel has been turned off by Admin.</p>
   </div>
 {% else %}
@@ -33,6 +34,7 @@
 
   <script>
   let consoleTimer = null;
+  const panelName = {{ panel_name | tojson }};
 
   function copyRange(rangeText, btn) {
     navigator.clipboard.writeText(rangeText);
@@ -50,7 +52,7 @@
     if (box) {
       box.innerHTML = `
         <div class="card rounded-2xl p-6 border border-rose-700/40 bg-rose-950/20 space-y-1">
-          <div class="text-base font-bold text-rose-300">Voltx Panel is OFF</div>
+          <div class="text-base font-bold text-rose-300">${panelName} Panel is OFF</div>
           <div class="text-xs text-gray-400">${msg}</div>
         </div>
       `;
