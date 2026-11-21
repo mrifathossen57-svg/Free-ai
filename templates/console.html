@@ -1,69 +1,111 @@
 {% extends "base.html" %}
 {% block title %}Live Console{% endblock %}
 {% block content %}
+{% set is_voltx_on = voltx_panel_active if voltx_panel_active is defined else true %}
+
 <div class="flex items-center justify-between mb-6">
   <div>
     <h1 class="text-2xl font-bold">Live Console</h1>
-    <p class="text-xs text-gray-400">Global live feed of recent hits (Auto-refresh every 5s)</p>
+    <p class="text-xs text-gray-400">
+      {% if is_voltx_on %}
+        Global live feed of recent hits (Auto-refresh every 5s)
+      {% else %}
+        Voltx Panel is currently turned OFF by Admin
+      {% endif %}
+    </p>
   </div>
-  <span class="px-3 py-1 rounded-full bg-emerald-950 border border-emerald-700/50 text-emerald-400 text-xs font-semibold">● LIVE</span>
+  {% if is_voltx_on %}
+    <span class="px-3 py-1 rounded-full bg-emerald-950 border border-emerald-700/50 text-emerald-400 text-xs font-semibold">● LIVE</span>
+  {% else %}
+    <span class="px-3 py-1 rounded-full bg-rose-950 border border-rose-700/50 text-rose-400 text-xs font-semibold">● OFF</span>
+  {% endif %}
 </div>
 
-<div id="console-feed" class="space-y-3">
-  <div class="card rounded-2xl p-5 text-sm text-gray-400">Loading live console feed...</div>
-</div>
+{% if not is_voltx_on %}
+  <div class="card rounded-2xl p-6 border border-rose-700/40 bg-rose-950/20 space-y-1">
+    <h2 class="text-base font-bold text-rose-300">Voltx Panel is OFF</h2>
+    <p class="text-xs text-gray-400">This panel has been turned off by Admin.</p>
+  </div>
+{% else %}
+  <div id="console-feed" class="space-y-3">
+    <div class="card rounded-2xl p-5 text-sm text-gray-400">Loading live console feed...</div>
+  </div>
 
-<script>
-function copyRange(rangeText, btn) {
-  navigator.clipboard.writeText(rangeText);
-  const old = btn.innerText;
-  btn.innerText = 'Copied!';
-  setTimeout(() => btn.innerText = old, 1200);
-}
+  <script>
+  let consoleTimer = null;
 
-async function loadConsole() {
-  try {
-    const res = await fetch('/api/bridge/console');
-    const json = await res.json();
-    const hits = (json.data && json.data.hits) || [];
+  function copyRange(rangeText, btn) {
+    navigator.clipboard.writeText(rangeText);
+    const old = btn.innerText;
+    btn.innerText = 'Copied!';
+    setTimeout(() => btn.innerText = old, 1200);
+  }
+
+  function renderPanelOff(msg = 'This panel has been turned off by Admin.') {
     const box = document.getElementById('console-feed');
-
-    if (!hits.length) {
-      box.innerHTML = '<div class="card rounded-2xl p-5 text-sm text-gray-400">No recent hits found.</div>';
-      return;
+    if (consoleTimer) {
+      clearInterval(consoleTimer);
+      consoleTimer = null;
     }
-
-    box.innerHTML = hits.map(h => {
-      const t = h.time ? new Date(h.time).toLocaleTimeString() : '';
-      return `
-        <div class="card rounded-2xl p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-          <div class="space-y-1">
-            <div class="flex items-center gap-2 text-xs">
-              <span class="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 font-bold">${h.sid || 'SERVICE'}</span>
-              <span class="font-mono text-amber-300 font-semibold">${h.range || ''}</span>
-              <span class="text-gray-500">${t}</span>
-            </div>
-            <div class="text-sm text-gray-200 break-all">→ ${h.message || ''}</div>
-          </div>
-          <div class="flex items-center gap-2 shrink-0">
-            <button onclick="copyRange('${h.range}', this)"
-                    class="px-3 py-1.5 rounded-xl bg-[#1a221e] hover:bg-[#24302a] text-xs text-emerald-300 border border-emerald-800/40">
-              Copy Range
-            </button>
-            <a href="/page/get-number?range=${encodeURIComponent(h.range || '')}"
-               class="px-3 py-1.5 rounded-xl accent-btn text-xs text-white font-semibold">
-              Use Range →
-            </a>
-          </div>
+    if (box) {
+      box.innerHTML = `
+        <div class="card rounded-2xl p-6 border border-rose-700/40 bg-rose-950/20 space-y-1">
+          <div class="text-base font-bold text-rose-300">Voltx Panel is OFF</div>
+          <div class="text-xs text-gray-400">${msg}</div>
         </div>
       `;
-    }).join('');
-  } catch (e) {
-    console.error(e);
+    }
   }
-}
 
-loadConsole();
-setInterval(loadConsole, 5000);
-</script>
+  async function loadConsole() {
+    try {
+      const res = await fetch('/api/bridge/console');
+      const json = await res.json();
+      if (json.voltx_active === false || (json.meta && json.meta.code === 503)) {
+        renderPanelOff(json.message || 'This panel has been turned off by Admin.');
+        return;
+      }
+
+      const hits = (json.data && json.data.hits) || [];
+      const box = document.getElementById('console-feed');
+
+      if (!hits.length) {
+        box.innerHTML = '<div class="card rounded-2xl p-5 text-sm text-gray-400">No recent hits found.</div>';
+        return;
+      }
+
+      box.innerHTML = hits.map(h => {
+        const t = h.time ? new Date(h.time).toLocaleTimeString() : '';
+        return `
+          <div class="card rounded-2xl p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div class="space-y-1">
+              <div class="flex items-center gap-2 text-xs">
+                <span class="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 font-bold">${h.sid || 'SERVICE'}</span>
+                <span class="font-mono text-amber-300 font-semibold">${h.range || ''}</span>
+                <span class="text-gray-500">${t}</span>
+              </div>
+              <div class="text-sm text-gray-200 break-all">→ ${h.message || ''}</div>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <button onclick="copyRange('${h.range}', this)"
+                      class="px-3 py-1.5 rounded-xl bg-[#1a221e] hover:bg-[#24302a] text-xs text-emerald-300 border border-emerald-800/40">
+                Copy Range
+              </button>
+              <a href="/page/get-number?range=${encodeURIComponent(h.range || '')}"
+                 class="px-3 py-1.5 rounded-xl accent-btn text-xs text-white font-semibold">
+                Use Range →
+              </a>
+            </div>
+          </div>
+        `;
+      }).join('');
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  loadConsole();
+  consoleTimer = setInterval(loadConsole, 5000);
+  </script>
+{% endif %}
 {% endblock %}
