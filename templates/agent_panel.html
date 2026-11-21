@@ -2,12 +2,18 @@
 {% block title %}Agent Panel{% endblock %}
 {% block content %}
 <div class="max-w-4xl mx-auto space-y-6">
-  <div class="flex items-center justify-between">
+  <div class="flex flex-wrap items-center justify-between gap-2">
     <div>
       <h1 class="text-2xl font-bold">Agent Panel</h1>
-      <p class="text-xs text-gray-400">Your Agent Email, Service Rate Setup & OTP Statistics</p>
+      <p class="text-xs text-gray-400">Your Agent Email, Service Rate Setup &amp; OTP Statistics</p>
     </div>
-    <a href="{{ url_for('logout') }}" class="px-4 py-2 rounded-xl bg-[#181f1b] text-xs text-rose-400">Logout</a>
+    <div class="flex items-center gap-2">
+      <button type="button" onclick="openApiPermissionModal('', 'enable')"
+              class="px-4 py-2 rounded-xl accent-btn text-xs font-semibold text-white">
+        API Permission
+      </button>
+      <a href="{{ url_for('logout') }}" class="px-4 py-2 rounded-xl bg-[#181f1b] text-xs text-rose-400">Logout</a>
+    </div>
   </div>
 
   <div class="card rounded-2xl p-5 space-y-4">
@@ -94,6 +100,17 @@
           </div>
           <div class="flex flex-wrap items-center gap-2 sm:gap-3">
             <span class="text-gray-400">OTP: <strong class="text-white">{{ u.otp_count }}</strong></span>
+            {% if u.api_enabled == 1 %}
+              <button type="button" onclick="openApiPermissionModal('{{ u.email }}', 'disable')"
+                      class="px-2.5 py-1 rounded-lg bg-emerald-950 text-emerald-400 border border-emerald-700/40 font-semibold">
+                API ON
+              </button>
+            {% else %}
+              <button type="button" onclick="openApiPermissionModal('{{ u.email }}', 'enable')"
+                      class="px-2.5 py-1 rounded-lg bg-[#181f1b] hover:bg-[#222c26] text-amber-300 border border-[#2a3630] font-semibold">
+                API Perm
+              </button>
+            {% endif %}
             <span class="font-semibold {% if u.status == 'ACTIVE' %}text-emerald-400{% elif u.status in ('DEACTIVATED', 'REJECTED') %}text-rose-400{% else %}text-amber-300{% endif %}">
               {{ u.status }}
             </span>
@@ -136,4 +153,71 @@
     </div>
   </div>
 </div>
+
+<!-- API Permission Modal -->
+<div id="apiPermissionModal" class="fixed inset-0 z-50 hidden bg-black/70 items-center justify-center p-4">
+  <div class="card w-full max-w-md rounded-2xl p-5 space-y-4 border border-[#27312c]">
+    <div class="flex items-center justify-between">
+      <h3 id="apiPermTitle" class="text-base font-bold text-white">API Permission</h3>
+      <button type="button" onclick="closeApiPermissionModal()" class="text-xs text-gray-400 hover:text-white">✕</button>
+    </div>
+    <p id="apiPermDesc" class="text-xs text-gray-400">
+      Enter the user's account email to activate API access. Once enabled, their API key will appear on their Profile page.
+    </p>
+    <form method="POST" action="{{ url_for('agent_api_permission') }}" class="space-y-3">
+      <select id="apiPermMode" name="mode"
+              class="w-full px-3 py-2 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-xs text-gray-200">
+        <option value="enable">Enable API Permission</option>
+        <option value="disable">Disable API Permission</option>
+      </select>
+      <input id="apiPermEmail" type="email" name="user_email" required placeholder="user@example.com"
+             class="w-full px-3.5 py-2.5 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-xs text-white" />
+      <div class="flex items-center justify-end gap-2 pt-1">
+        <button type="button" onclick="closeApiPermissionModal()"
+                class="px-3.5 py-2 rounded-xl bg-[#181f1b] text-xs text-gray-300">
+          Cancel
+        </button>
+        <button type="submit" id="apiPermSubmitBtn"
+                class="px-4 py-2 rounded-xl accent-btn text-xs font-semibold text-white">
+          Confirm
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+  function openApiPermissionModal(email = "", mode = "enable") {
+    const modal = document.getElementById("apiPermissionModal");
+    const emailInput = document.getElementById("apiPermEmail");
+    const modeSelect = document.getElementById("apiPermMode");
+    const titleEl = document.getElementById("apiPermTitle");
+    const descEl = document.getElementById("apiPermDesc");
+
+    if (emailInput) emailInput.value = email || "";
+    if (modeSelect) modeSelect.value = mode === "disable" ? "disable" : "enable";
+
+    if (mode === "disable") {
+      if (titleEl) titleEl.textContent = "Disable API Permission";
+      if (descEl) descEl.textContent = "This will hide and disable API access for this user account.";
+    } else {
+      if (titleEl) titleEl.textContent = "Grant API Permission";
+      if (descEl) descEl.textContent = "Enter the user's account email to activate API access. Once enabled, their API key will appear on their Profile page.";
+    }
+
+    if (modal) {
+      modal.classList.remove("hidden");
+      modal.classList.add("flex");
+      setTimeout(() => emailInput?.focus(), 50);
+    }
+  }
+
+  function closeApiPermissionModal() {
+    const modal = document.getElementById("apiPermissionModal");
+    if (modal) {
+      modal.classList.add("hidden");
+      modal.classList.remove("flex");
+    }
+  }
+</script>
 {% endblock %}
