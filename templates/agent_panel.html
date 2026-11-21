@@ -92,21 +92,36 @@
             <span class="font-semibold text-white">{{ u.name }}</span>
             <span class="text-gray-400">({{ u.email }})</span>
           </div>
-          <div class="flex items-center gap-3">
+          <div class="flex flex-wrap items-center gap-2 sm:gap-3">
             <span class="text-gray-400">OTP: <strong class="text-white">{{ u.otp_count }}</strong></span>
-            <span class="font-semibold {% if u.status == 'ACTIVE' %}text-emerald-400{% elif u.status == 'DEACTIVATED' %}text-rose-400{% else %}text-amber-300{% endif %}">
+            <span class="font-semibold {% if u.status == 'ACTIVE' %}text-emerald-400{% elif u.status in ('DEACTIVATED', 'REJECTED') %}text-rose-400{% else %}text-amber-300{% endif %}">
               {{ u.status }}
             </span>
 
-            {% if u.status != 'DEACTIVATED' %}
-              <form method="POST" action="{{ url_for('agent_toggle_user_status', action='deactivate') }}">
+            {% if u.status == 'PENDING' %}
+              <form method="POST" action="{{ url_for('agent_decide_user') }}" class="inline">
+                <input type="hidden" name="user_email" value="{{ u.email }}" />
+                <input type="hidden" name="decision" value="approve" />
+                <button type="submit" class="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold">
+                  Approve
+                </button>
+              </form>
+              <form method="POST" action="{{ url_for('agent_decide_user') }}" class="inline">
+                <input type="hidden" name="user_email" value="{{ u.email }}" />
+                <input type="hidden" name="decision" value="reject" />
+                <button type="submit" class="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-semibold">
+                  Reject
+                </button>
+              </form>
+            {% elif u.status == 'ACTIVE' %}
+              <form method="POST" action="{{ url_for('agent_toggle_user_status', action='deactivate') }}" class="inline">
                 <input type="hidden" name="user_email" value="{{ u.email }}" />
                 <button type="submit" class="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-semibold">
                   Deactivate
                 </button>
               </form>
-            {% else %}
-              <form method="POST" action="{{ url_for('agent_toggle_user_status', action='activate') }}">
+            {% elif u.status == 'DEACTIVATED' %}
+              <form method="POST" action="{{ url_for('agent_toggle_user_status', action='activate') }}" class="inline">
                 <input type="hidden" name="user_email" value="{{ u.email }}" />
                 <button type="submit" class="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold">
                   Activate
