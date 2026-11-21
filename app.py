@@ -42,16 +42,16 @@ SMTP_PASS = os.environ.get("SMTP_PASS", "").strip()
 BASE_URL = os.environ.get("BASE_URL", "").strip()
 
 DEFAULT_COUNTRY_RATES = {
-    "United Kingdom": 0.15,
+    "United Kingdom": 0.05,
     "Guinea": 0.10,
-    "Ivory Coast": 0.10,
+    "Ivory Coast": 0.05,
     "Bangladesh": 0.08,
     "Default": 0.05,
 }
 
 DEFAULT_SERVICE_RATES = {
-    "WhatsApp": 0.20,
-    "Facebook": 0.12,
+    "WhatsApp": 0.05,
+    "Facebook": 0.02,
     "TikTok": 0.12,
     "Telegram": 0.15,
 }
@@ -208,7 +208,6 @@ def init_db():
     conn.close()
 
 
-
 def get_auto_account_flag() -> bool:
     conn = get_db()
     row = conn.execute("SELECT v FROM settings WHERE k = 'agent_mail_auto_account'").fetchone()
@@ -336,11 +335,11 @@ def send_email_smtp(to_email: str, subject: str, body: str) -> bool:
         msg["To"] = to_email
 
         if SMTP_PORT == 465:
-            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=15) as server:
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=5) as server:
                 server.login(SMTP_USER, SMTP_PASS)
                 server.sendmail(SMTP_USER, [to_email], msg.as_string())
         else:
-            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=5) as server:
                 server.ehlo()
                 server.starttls()
                 server.ehlo()
@@ -348,7 +347,7 @@ def send_email_smtp(to_email: str, subject: str, body: str) -> bool:
                 server.sendmail(SMTP_USER, [to_email], msg.as_string())
         return True
     except Exception as e:
-        print("SMTP Error:", repr(e))
+        print("Email send failed, continuing approval:", repr(e))
         return False
 
 
