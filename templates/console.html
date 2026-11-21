@@ -4,22 +4,53 @@
 {% set is_voltx_on = voltx_panel_active if voltx_panel_active is defined else true %}
 {% set panel_name = panel_brand_name if panel_brand_name is defined else "SR 1" %}
 
-<div class="flex items-center justify-between mb-6">
+<div class="flex flex-wrap items-center justify-between gap-3 mb-6">
   <div>
     <h1 class="text-2xl font-bold">Live Console</h1>
     <p class="text-xs text-gray-400">
       {% if is_voltx_on %}
-        Global live feed of recent hits (Auto-refresh every 5s)
+        Global live feed of recent hits (Auto-refresh every 30s)
       {% else %}
         {{ panel_name }} Panel is currently turned OFF by Admin
       {% endif %}
     </p>
   </div>
-  {% if is_voltx_on %}
-    <span class="px-3 py-1 rounded-full bg-emerald-950 border border-emerald-700/50 text-emerald-400 text-xs font-semibold">● LIVE</span>
-  {% else %}
-    <span class="px-3 py-1 rounded-full bg-rose-950 border border-rose-700/50 text-rose-400 text-xs font-semibold">● OFF</span>
-  {% endif %}
+
+  <div class="flex items-center gap-2 flex-wrap">
+    {% if is_voltx_on %}
+      <button
+        type="button"
+        id="toggle-service-search"
+        onclick="toggleServiceSearch()"
+        class="px-3 py-1.5 rounded-xl bg-[#16261e] hover:bg-[#1e352a] text-xs text-emerald-300 font-semibold border border-emerald-800/50 transition"
+      >
+        Search Service
+      </button>
+
+      <div id="service-search-box" class="hidden items-center gap-1.5 bg-[#121614] border border-emerald-700/60 rounded-xl px-2.5 py-1">
+        <input
+          type="text"
+          id="service-search-input"
+          oninput="renderFilteredHits()"
+          placeholder="Type WhatsApp..."
+          autocomplete="off"
+          class="bg-transparent text-xs text-gray-100 placeholder-gray-500 focus:outline-none w-36 sm:w-44"
+        />
+        <button
+          type="button"
+          onclick="clearServiceSearch()"
+          class="text-xs text-gray-400 hover:text-white px-1"
+          title="Clear"
+        >
+          ✕
+        </button>
+      </div>
+
+      <span class="px-3 py-1 rounded-full bg-emerald-950 border border-emerald-700/50 text-emerald-400 text-xs font-semibold">● LIVE</span>
+    {% else %}
+      <span class="px-3 py-1 rounded-full bg-rose-950 border border-rose-700/50 text-rose-400 text-xs font-semibold">● OFF</span>
+    {% endif %}
+  </div>
 </div>
 
 {% if not is_voltx_on %}
@@ -34,13 +65,84 @@
 
   <script>
   let consoleTimer = null;
+  let latestHits = [];
   const panelName = {{ panel_name | tojson }};
+
+  function toggleServiceSearch() {
+    const box = document.getElementById('service-search-box');
+    const input = document.getElementById('service-search-input');
+    if (!box || !input) return;
+
+    const isHidden = box.classList.contains('hidden');
+    if (isHidden) {
+      box.classList.remove('hidden');
+      box.classList.add('flex');
+      input.focus();
+    } else {
+      box.classList.add('hidden');
+      box.classList.remove('flex');
+    }
+  }
+
+  function clearServiceSearch() {
+    const input = document.getElementById('service-search-input');
+    if (input) {
+      input.value = '';
+      renderFilteredHits();
+      input.focus();
+    }
+  }
 
   function copyRange(rangeText, btn) {
     navigator.clipboard.writeText(rangeText);
     const old = btn.innerText;
     btn.innerText = 'Copied!';
     setTimeout(() => btn.innerText = old, 1200);
+  }
+
+  function renderFilteredHits() {
+    const box = document.getElementById('console-feed');
+    const input = document.getElementById('service-search-input');
+    if (!box) return;
+
+    const query = (input ? input.value : '').trim().toLowerCase();
+    const filteredHits = query
+      ? latestHits.filter(h => String(h.sid || '').toLowerCase().includes(query))
+      : latestHits;
+
+    if (!filteredHits.length) {
+      const emptyMsg = query
+        ? `No recent hits found for "${input.value.trim()}".`
+        : 'No recent hits found.';
+      box.innerHTML = `<div class="card rounded-2xl p-5 text-sm text-gray-400">${emptyMsg}</div>`;
+      return;
+    }
+
+    box.innerHTML = filteredHits.map(h => {
+      const t = h.time ? new Date(h.time).toLocaleTimeString() : '';
+      return `
+        <div class="card rounded-2xl p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          <div class="space-y-1">
+            <div class="flex items-center gap-2 text-xs">
+              <span class="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 font-bold">${h.sid || 'SERVICE'}</span>
+              <span class="font-mono text-amber-300 font-semibold">${h.range || ''}</span>
+              <span class="text-gray-500">${t}</span>
+            </div>
+            <div class="text-sm text-gray-200 break-all">→ ${h.message || ''}</div>
+          </div>
+          <div class="flex items-center gap-2 shrink-0">
+            <button onclick="copyRange('${h.range}', this)"
+                    class="px-3 py-1.5 rounded-xl bg-[#1a221e] hover:bg-[#24302a] text-xs text-emerald-300 border border-emerald-800/40">
+              Copy Range
+            </button>
+            <a href="/page/get-number?range=${encodeURIComponent(h.range || '')}"
+               class="px-3 py-1.5 rounded-xl accent-btn text-xs text-white font-semibold">
+              Use Range →
+            </a>
+          </div>
+        </div>
+      `;
+    }).join('');
   }
 
   function renderPanelOff(msg = 'This panel has been turned off by Admin.') {
@@ -68,46 +170,15 @@
         return;
       }
 
-      const hits = (json.data && json.data.hits) || [];
-      const box = document.getElementById('console-feed');
-
-      if (!hits.length) {
-        box.innerHTML = '<div class="card rounded-2xl p-5 text-sm text-gray-400">No recent hits found.</div>';
-        return;
-      }
-
-      box.innerHTML = hits.map(h => {
-        const t = h.time ? new Date(h.time).toLocaleTimeString() : '';
-        return `
-          <div class="card rounded-2xl p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-            <div class="space-y-1">
-              <div class="flex items-center gap-2 text-xs">
-                <span class="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 font-bold">${h.sid || 'SERVICE'}</span>
-                <span class="font-mono text-amber-300 font-semibold">${h.range || ''}</span>
-                <span class="text-gray-500">${t}</span>
-              </div>
-              <div class="text-sm text-gray-200 break-all">→ ${h.message || ''}</div>
-            </div>
-            <div class="flex items-center gap-2 shrink-0">
-              <button onclick="copyRange('${h.range}', this)"
-                      class="px-3 py-1.5 rounded-xl bg-[#1a221e] hover:bg-[#24302a] text-xs text-emerald-300 border border-emerald-800/40">
-                Copy Range
-              </button>
-              <a href="/page/get-number?range=${encodeURIComponent(h.range || '')}"
-                 class="px-3 py-1.5 rounded-xl accent-btn text-xs text-white font-semibold">
-                Use Range →
-              </a>
-            </div>
-          </div>
-        `;
-      }).join('');
+      latestHits = (json.data && json.data.hits) || [];
+      renderFilteredHits();
     } catch (e) {
       console.error(e);
     }
   }
 
   loadConsole();
-  consoleTimer = setInterval(loadConsole, 5000);
+  consoleTimer = setInterval(loadConsole, 30000);
   </script>
 {% endif %}
 {% endblock %}
