@@ -1,76 +1,114 @@
 {% extends "base.html" %}
 {% block title %}{{ section.label }}{% endblock %}
 {% block content %}
+{% set is_panel_on = voltx_panel_active if voltx_panel_active is defined else true %}
+{% set panel_name = panel_brand_name if panel_brand_name is defined else "SR 1" %}
+
 <div class="flex items-center justify-between mb-1">
   <h1 class="text-2xl font-bold">{{ section.label }}</h1>
   <span class="text-xs text-gray-500 font-mono">Window: 5h</span>
 </div>
 <p class="text-sm text-gray-400 mb-6">Recently active services and hitting ranges from connected panel (last 5 hours).</p>
 
-<div id="access-box" class="space-y-3">
-  <div class="card rounded-2xl p-5 text-sm text-gray-400">Loading active services &amp; ranges...</div>
-</div>
+{% if not is_panel_on %}
+  <div class="card rounded-2xl p-6 border border-rose-700/40 bg-rose-950/20 space-y-1">
+    <h2 class="text-base font-bold text-rose-300">{{ panel_name }} Panel is OFF</h2>
+    <p class="text-xs text-gray-400">This panel has been turned off by Admin.</p>
+  </div>
+{% else %}
+  <div id="access-box" class="space-y-3">
+    <div class="card rounded-2xl p-5 text-sm text-gray-400">Loading active services &amp; ranges...</div>
+  </div>
 
-<script>
-const ACCESS_MAX_AGE_MS = 5 * 60 * 60 * 1000; // ৫ ঘণ্টার পুরনো ডেটা বাদ দেওয়া হবে
+  <script>
+  const ACCESS_MAX_AGE_MS = 5 * 60 * 60 * 1000; // ৫ ঘণ্টার পুরনো ডেটা বাদ দেওয়া হবে
+  const panelName = {{ panel_name | tojson }};
+  let accessTimer = null;
 
-function isFreshTimestamp(val) {
-  if (!val) return true;
-  const ts = typeof val === 'number'
-    ? (val < 1e12 ? val * 1000 : val)
-    : Date.parse(val);
-  if (Number.isNaN(ts)) return true;
-  return (Date.now() - ts) <= ACCESS_MAX_AGE_MS;
-}
-
-function formatTime(val) {
-  if (!val) return '';
-  const ts = typeof val === 'number'
-    ? (val < 1e12 ? val * 1000 : val)
-    : Date.parse(val);
-  if (Number.isNaN(ts)) return '';
-  return new Date(ts).toLocaleTimeString();
-}
-
-async function loadAccess() {
-  try {
-    const res = await fetch('/api/bridge/liveaccess', { cache: 'no-store' });
-    const json = await res.json();
-    const rawServices = (json.data && json.data.services) || [];
-    const box = document.getElementById('access-box');
-
-    const services = rawServices.filter(s => {
-      if (!isFreshTimestamp(s.last_at)) return false;
-      return Array.isArray(s.ranges) && s.ranges.length > 0;
-    });
-
-    if (!services.length) {
-      box.innerHTML = '<div class="card rounded-2xl p-5 text-sm text-gray-400">No active services within the last 5 hours.</div>';
-      return;
-    }
-
-    box.innerHTML = services.map(s => `
-      <div class="card rounded-2xl p-4">
-        <div class="flex items-center justify-between mb-2">
-          <span class="font-bold text-emerald-400">${s.sid}</span>
-          <span class="text-xs text-gray-500">${formatTime(s.last_at)}</span>
-        </div>
-        <div class="flex flex-wrap gap-2">
-          ${(s.ranges || []).map(r => `
-            <a href="/page/get-number?range=${encodeURIComponent(r)}"
-               class="px-3 py-1 rounded-lg bg-[#18201c] hover:bg-emerald-700 hover:text-white font-mono text-xs text-amber-300 border border-[#26322c]">
-              ${r} →
-            </a>
-          `).join('')}
-        </div>
-      </div>
-    `).join('');
-  } catch (e) {
-    console.error(e);
+  function isFreshTimestamp(val) {
+    if (!val) return true;
+    const ts = typeof val === 'number'
+      ? (val < 1e12 ? val * 1000 : val)
+      : Date.parse(val);
+    if (Number.isNaN(ts)) return true;
+    return (Date.now() - ts) <= ACCESS_MAX_AGE_MS;
   }
-}
 
-loadAccess();
-setInterval(loadAccess, 5000);
-</script>
+  function formatTime(val) {
+    if (!val) return '';
+    const ts = typeof val === 'number'
+      ? (val < 1e12 ? val * 1000 : val)
+      : Date.parse(val);
+    if (Number.isNaN(ts)) return '';
+    return new Date(ts).toLocaleTimeString();
+  }
+
+  function renderAccessOff(msg = 'This panel has been turned off by Admin.') {
+    const box = document.getElementById('access-box');
+    if (accessTimer) {
+      clearInterval(accessTimer);
+      accessTimer = null;
+    }
+    if (box) {
+      box.innerHTML = `
+        <div class="card rounded-2xl p-6 border border-rose-700/40 bg-rose-950/20 space-y-1">
+          <div class="text-base font-bold text-rose-300">${panelName} Panel is OFF</div>
+          <div class="text-xs text-gray-400">${msg}</div>
+        </div>
+      `;
+    }
+  }
+
+  async function loadAccess() {
+    try {
+      const res = await fetch('/api/bridge/liveaccess', { cache: 'no-store' });
+      const json = await res.json();
+
+      if (
+        json.panel_active === false ||
+        json.voltx_active === false ||
+        (json.meta && json.meta.code === 503)
+      ) {
+        renderAccessOff(json.message || 'This panel has been turned off by Admin.');
+        return;
+      }
+
+      const rawServices = (json.data && json.data.services) || [];
+      const box = document.getElementById('access-box');
+
+      const services = rawServices.filter(s => {
+        if (!isFreshTimestamp(s.last_at)) return false;
+        return Array.isArray(s.ranges) && s.ranges.length > 0;
+      });
+
+      if (!services.length) {
+        box.innerHTML = '<div class="card rounded-2xl p-5 text-sm text-gray-400">No active services within the last 5 hours.</div>';
+        return;
+      }
+
+      box.innerHTML = services.map(s => `
+        <div class="card rounded-2xl p-4">
+          <div class="flex items-center justify-between mb-2">
+            <span class="font-bold text-emerald-400">${s.sid}</span>
+            <span class="text-xs text-gray-500">${formatTime(s.last_at)}</span>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            ${(s.ranges || []).map(r => `
+              <a href="/page/get-number?range=${encodeURIComponent(r)}"
+                 class="px-3 py-1 rounded-lg bg-[#18201c] hover:bg-emerald-700 hover:text-white font-mono text-xs text-amber-300 border border-[#26322c]">
+                ${r} →
+              </a>
+            `).join('')}
+          </div>
+        </div>
+      `).join('');
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  loadAccess();
+  accessTimer = setInterval(loadAccess, 5000);
+  </script>
+{% endif %}
 {% endblock %}
