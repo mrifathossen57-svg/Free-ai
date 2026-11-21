@@ -1,29 +1,45 @@
 {% extends "base.html" %}
 {% block title %}Get Number{% endblock %}
 {% block content %}
+{% set is_panel_on = voltx_panel_active if voltx_panel_active is defined else true %}
+{% set panel_name = panel_brand_name if panel_brand_name is defined else "SR 1" %}
+
 <h1 class="text-2xl font-bold mb-1">Get Number</h1>
 <p class="text-sm text-gray-400 mb-6">Paste range (e.g. 22501XXX) to allocate a number. Numbers auto-expire after 15 minutes.</p>
 
-<div class="card rounded-2xl p-5 mb-6">
-  <label class="block text-xs text-emerald-400 uppercase font-semibold mb-2">Enter Number Range</label>
-  <div class="flex flex-col sm:flex-row gap-3">
-    <input id="range-input" type="text" placeholder="# 22501XXX or 26134"
-           class="flex-1 px-4 py-3 rounded-xl bg-[#0b0e0c] border border-[#242d28] text-white font-mono text-sm focus:outline-none focus:border-emerald-500" />
-    <button id="get-num-btn" onclick="allocateNumber()"
-            class="px-6 py-3 rounded-xl accent-btn text-white font-semibold text-sm shrink-0">
-      Get Number
-    </button>
+{% if not is_panel_on %}
+  <div class="card rounded-2xl p-6 border border-rose-700/40 bg-rose-950/20 space-y-1 mb-6">
+    <h2 class="text-base font-bold text-rose-300">{{ panel_name }} Panel is OFF</h2>
+    <p class="text-xs text-gray-400">This panel has been turned off by Admin.</p>
   </div>
-  <div id="status-msg" class="text-xs mt-3 text-amber-300 hidden"></div>
-</div>
+{% else %}
+  <div id="getnum-off-banner" class="card rounded-2xl p-6 border border-rose-700/40 bg-rose-950/20 space-y-1 mb-6 hidden">
+    <div class="text-base font-bold text-rose-300">{{ panel_name }} Panel is OFF</div>
+    <div id="getnum-off-msg" class="text-xs text-gray-400">This panel has been turned off by Admin.</div>
+  </div>
+
+  <div id="getnum-form-card" class="card rounded-2xl p-5 mb-6">
+    <label class="block text-xs text-emerald-400 uppercase font-semibold mb-2">Enter Number Range</label>
+    <div class="flex flex-col sm:flex-row gap-3">
+      <input id="range-input" type="text" placeholder="# 22501XXX or 26134"
+             class="flex-1 px-4 py-3 rounded-xl bg-[#0b0e0c] border border-[#242d28] text-white font-mono text-sm focus:outline-none focus:border-emerald-500" />
+      <button id="get-num-btn" onclick="allocateNumber()"
+              class="px-6 py-3 rounded-xl accent-btn text-white font-semibold text-sm shrink-0">
+        Get Number
+      </button>
+    </div>
+    <div id="status-msg" class="text-xs mt-3 text-amber-300 hidden"></div>
+  </div>
+{% endif %}
 
 <h2 class="text-sm font-semibold text-gray-400 uppercase mb-3">Allocated Numbers & Live OTP</h2>
 <div id="numbers-list" class="space-y-3"></div>
 
 <script>
 const params = new URLSearchParams(window.location.search);
-if (params.get('range')) {
-  document.getElementById('range-input').value = params.get('range');
+const rangeInputEl = document.getElementById('range-input');
+if (rangeInputEl && params.get('range')) {
+  rangeInputEl.value = params.get('range');
 }
 
 function formatTimer(sec) {
@@ -71,16 +87,27 @@ function copyText(txt, btn) {
   setTimeout(() => btn.innerText = old, 1200);
 }
 
+function showGetnumPanelOff(msgText = 'This panel has been turned off by Admin.') {
+  const banner = document.getElementById('getnum-off-banner');
+  const formCard = document.getElementById('getnum-form-card');
+  const offMsg = document.getElementById('getnum-off-msg');
+  if (banner) banner.classList.remove('hidden');
+  if (formCard) formCard.classList.add('hidden');
+  if (offMsg) offMsg.innerText = msgText;
+}
+
 async function allocateNumber() {
   const input = document.getElementById('range-input');
   const msg = document.getElementById('status-msg');
   const btn = document.getElementById('get-num-btn');
-  const rangeVal = input.value.trim();
+  if (!input || !btn) return;
 
+  const rangeVal = input.value.trim();
   if (!rangeVal) return;
+
   btn.disabled = true;
   btn.innerText = 'Allocating...';
-  msg.classList.add('hidden');
+  if (msg) msg.classList.add('hidden');
 
   try {
     const res = await fetch('/api/bridge/getnum', {
@@ -89,15 +116,29 @@ async function allocateNumber() {
       body: JSON.stringify({ range: rangeVal })
     });
     const data = await res.json();
+
+    if (
+      data.panel_active === false ||
+      data.voltx_active === false ||
+      (data.meta && data.meta.code === 503)
+    ) {
+      showGetnumPanelOff(data.message || 'This panel has been turned off by Admin.');
+      return;
+    }
+
     if (!data.ok) {
-      msg.innerText = data.message || 'Failed to get number.';
-      msg.classList.remove('hidden');
+      if (msg) {
+        msg.innerText = data.message || 'Failed to get number.';
+        msg.classList.remove('hidden');
+      }
     } else {
       await refreshNumbers();
     }
   } catch (e) {
-    msg.innerText = 'Network error while requesting number.';
-    msg.classList.remove('hidden');
+    if (msg) {
+      msg.innerText = 'Network error while requesting number.';
+      msg.classList.remove('hidden');
+    }
   } finally {
     btn.disabled = false;
     btn.innerText = 'Get Number';
@@ -108,8 +149,11 @@ let cachedNumbers = [];
 
 async function refreshNumbers() {
   try {
-    const res = await fetch('/api/bridge/my-numbers');
+    const res = await fetch('/api/bridge/my-numbers', { cache: 'no-store' });
     const data = await res.json();
+    if (data.panel_active === false) {
+      showGetnumPanelOff('This panel has been turned off by Admin.');
+    }
     if (data.ok) {
       cachedNumbers = data.numbers || [];
       renderNumbers();
@@ -119,6 +163,8 @@ async function refreshNumbers() {
 
 function renderNumbers() {
   const box = document.getElementById('numbers-list');
+  if (!box) return;
+
   if (!cachedNumbers.length) {
     box.innerHTML = '<div class="card rounded-2xl p-5 text-sm text-gray-400">No numbers generated yet.</div>';
     return;
