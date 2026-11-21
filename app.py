@@ -57,6 +57,7 @@ DEFAULT_SERVICE_RATES = {
 }
 
 NUMBER_TTL_SECONDS = 15 * 60
+MAX_ACCOUNTS_PER_AGENT = 200
 
 SIDEBAR_ITEMS = [
     {"key": "dashboard", "label": "Dashboard", "group": None},
@@ -491,11 +492,24 @@ def register():
             flash("All fields are required.", "error")
             return redirect(url_for("register"))
 
+        if not get_agent_row(agent_email):
+            flash("Agent wrong", "error")
+            return redirect(url_for("register"))
+
         if get_user_dict(email):
             flash("An account with this email already exists.", "error")
             return redirect(url_for("register"))
 
-        ensure_agent_exists(agent_email, DEFAULT_AGENT_PASS)
+        conn = get_db()
+        agent_acc_count = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM users WHERE agent_email = ?",
+            (agent_email,)
+        ).fetchone()["cnt"]
+        conn.close()
+
+        if agent_acc_count >= MAX_ACCOUNTS_PER_AGENT:
+            flash(f"Agent '{agent_email}' has reached the maximum limit of {MAX_ACCOUNTS_PER_AGENT} accounts.", "error")
+            return redirect(url_for("register"))
 
         status = "ACTIVE" if auto_flag else "PENDING"
         now_dt = datetime.now()
@@ -658,6 +672,7 @@ def agent_panel(agent_email):
         agent_email=agent_email,
         requests_list=agent_users,
         user_count=len(agent_users),
+        max_accounts_per_agent=MAX_ACCOUNTS_PER_AGENT,
         total_otp=total_otp,
         today_otp=today_otp,
         month_otp=month_otp,
@@ -700,7 +715,18 @@ def admin_panel():
     agents_list = [dict(r) for r in conn.execute("SELECT * FROM agents ORDER BY rowid DESC").fetchall()]
     otp_logs = [dict(r) for r in conn.execute("SELECT * FROM otp_logs ORDER BY id DESC LIMIT 200").fetchall()]
     withdrawals = [dict(r) for r in conn.execute("SELECT * FROM withdrawals ORDER BY rowid DESC").fetchall()]
+
+    count_rows = conn.execute(
+        "SELECT agent_email, COUNT(*) AS cnt FROM users GROUP BY agent_email"
+    ).fetchall()
+    agent_account_counts = {r["agent_email"]: r["cnt"] for r in count_rows}
     conn.close()
+
+    pending_by_agent = {}
+    for u in users_dict.values():
+        if u.get("status") == "PENDING":
+            ag_mail = (u.get("agent_email") or "unknown").strip().lower()
+            pending_by_agent.setdefault(ag_mail, []).append(u)
 
     return render_template(
         "admin_panel.html",
@@ -711,6 +737,9 @@ def admin_panel():
         withdrawals=withdrawals,
         users=users_dict,
         agents=agents_list,
+        pending_by_agent=pending_by_agent,
+        agent_account_counts=agent_account_counts,
+        max_accounts_per_agent=MAX_ACCOUNTS_PER_AGENT,
     )
 
 
