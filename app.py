@@ -410,9 +410,9 @@ def send_email_smtp(to_email: str, subject: str, body: str) -> bool:
 def send_agent_mail(user: dict):
     agent_email = user["agent_email"]
     login_url = f"{get_base_url()}/login"
-    subject = f"Auto Account Created: {user['name']} ({user['email']})"
+    subject = f"Account Active: {user['name']} ({user['email']})"
     body = (
-        f"A new user account has been created automatically.\n\n"
+        f"A user account under your agent email is now active.\n\n"
         f"User Name: {user['name']}\n"
         f"User Email: {user['email']}\n"
         f"Status: {user['status']}\n"
@@ -505,10 +505,10 @@ def login():
             flash("Your account has been DEACTIVATED by your Agent/Admin.", "error")
             return redirect(url_for("login"))
         if user["status"] == "PENDING":
-            flash("Your account is PENDING Admin approval.", "error")
+            flash("Your account is PENDING approval from your Agent.", "error")
             return redirect(url_for("login"))
         if user["status"] == "REJECTED":
-            flash("Your account was REJECTED by Admin.", "error")
+            flash("Your account was REJECTED by your Agent.", "error")
             return redirect(url_for("login"))
 
         now_dt = datetime.now()
@@ -609,7 +609,7 @@ def register():
             flash("Account created automatically! Welcome to Dashboard.", "success")
             return redirect(url_for("dashboard"))
         else:
-            flash("Account submitted! Waiting for Admin approval.", "success")
+            flash("Account submitted! Waiting for your Agent's approval.", "success")
             return redirect(url_for("login"))
 
     return render_template("register.html", agent_mail_auto_account=auto_flag)
@@ -734,6 +734,41 @@ def agent_panel(agent_email):
     )
 
 
+@app.route("/agent/decide-user", methods=["POST"])
+@agent_login_required
+def agent_decide_user(agent_email):
+    user_email = request.form.get("user_email", "").strip().lower()
+    decision = request.form.get("decision", "").strip().lower()
+    user = get_user_dict(user_email)
+
+    if not user or user["agent_email"] != agent_email:
+        flash("User not found or not under your agent email.", "error")
+        return redirect(url_for("agent_panel"))
+
+    if user["status"] != "PENDING":
+        flash(f"User {user_email} is already {user['status']}.", "error")
+        return redirect(url_for("agent_panel"))
+
+    if decision == "approve":
+        conn = get_db()
+        conn.execute("UPDATE users SET status = 'ACTIVE' WHERE email = ?", (user_email,))
+        conn.commit()
+        conn.close()
+        user["status"] = "ACTIVE"
+        send_agent_mail(user)
+        flash(f"User {user_email} approved (ACTIVE).", "success")
+    elif decision == "reject":
+        conn = get_db()
+        conn.execute("UPDATE users SET status = 'REJECTED' WHERE email = ?", (user_email,))
+        conn.commit()
+        conn.close()
+        flash(f"User {user_email} rejected.", "success")
+    else:
+        flash("Invalid decision.", "error")
+
+    return redirect(url_for("agent_panel"))
+
+
 @app.route("/agent/set-service-rate", methods=["POST"])
 @agent_login_required
 def agent_set_service_rate(agent_email):
@@ -816,12 +851,6 @@ def admin_panel():
     agent_account_counts = {r["agent_email"]: r["cnt"] for r in count_rows}
     conn.close()
 
-    pending_by_agent = {}
-    for u in users_dict.values():
-        if u.get("status") == "PENDING":
-            ag_mail = (u.get("agent_email") or "unknown").strip().lower()
-            pending_by_agent.setdefault(ag_mail, []).append(u)
-
     return render_template(
         "admin_panel.html",
         agent_mail_auto_account=get_auto_account_flag(),
@@ -832,7 +861,6 @@ def admin_panel():
         withdrawals=withdrawals,
         users=users_dict,
         agents=agents_list,
-        pending_by_agent=pending_by_agent,
         agent_account_counts=agent_account_counts,
         max_accounts_per_agent=MAX_ACCOUNTS_PER_AGENT,
     )
@@ -869,39 +897,12 @@ def admin_remove_agent():
     return redirect(url_for("admin_panel"))
 
 
-@app.route("/admin/user/<decision>", methods=["POST"])
-@admin_login_required
-def decide_user_account(decision):
-    email = request.form.get("email", "").strip().lower()
-    user = get_user_dict(email)
-    if not user:
-        flash("User not found.", "error")
-        return redirect(url_for("admin_panel"))
-
-    if decision == "approve":
-        conn = get_db()
-        conn.execute("UPDATE users SET status = 'ACTIVE' WHERE email = ?", (email,))
-        conn.commit()
-        conn.close()
-        user["status"] = "ACTIVE"
-        send_agent_mail(user)
-        flash(f"User {email} approved (ACTIVE).", "success")
-    elif decision == "reject":
-        conn = get_db()
-        conn.execute("UPDATE users SET status = 'REJECTED' WHERE email = ?", (email,))
-        conn.commit()
-        conn.close()
-        flash(f"User {email} rejected.", "success")
-
-    return redirect(url_for("admin_panel"))
-
-
 @app.route("/admin/toggle-agent-mail-account", methods=["POST"])
 @admin_login_required
 def toggle_agent_mail_account():
     new_state = not get_auto_account_flag()
     set_auto_account_flag(new_state)
-    state_text = "ON (Auto Account Creation Active)" if new_state else "OFF (Pending Approval Required)"
+    state_text = "ON (Auto Account Creation Active)" if new_state else "OFF (Pending Agent Approval Required)"
     flash(f"Agent Mail Auto Account is now {state_text}.", "success")
     return redirect(url_for("admin_panel"))
 
