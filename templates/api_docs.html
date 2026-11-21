@@ -1,8 +1,7 @@
 {% extends "base.html" %}
 {% block title %}API Documentation{% endblock %}
 {% block content %}
-{% set site_base = request.host_url.rstrip('/') %}
-{% set user_key = user.api_key if user and user.api_key else "" %}
+{% set site_base = base_path if base_path else (request.host_url.rstrip('/') ~ '/api/v1') %}
 
 <div class="max-w-6xl space-y-6">
   <!-- Top Title & Base Path -->
@@ -10,7 +9,7 @@
     <div>
       <h1 class="text-2xl font-bold tracking-tight">API Documentation</h1>
       <p class="text-sm text-gray-400 mt-1">
-        Your token API reference. Authenticate with the <code class="text-emerald-300">mauthapi</code> header — try it live in the Playground.
+        Public API endpoint reference. Authenticate requests with your user API key in the <code class="text-emerald-300">mauthapi</code> header.
       </p>
     </div>
 
@@ -36,7 +35,7 @@
           <div>
             <h2 class="text-lg font-bold">Playground</h2>
             <p class="text-xs text-gray-400 mt-0.5">
-              Try your panel APIs live. Paste your API key (find it on your Profile page). The key is sent in the <code class="text-emerald-300">mauthapi</code> header.
+              Test the API endpoints live. Paste your active user API key (enabled via Agent <span class="text-gray-200 font-semibold">API Permission</span> on your Profile page). Sent in the <code class="text-emerald-300">mauthapi</code> header.
             </p>
           </div>
           <span id="pgStatusBadge" class="self-start sm:self-auto px-2.5 py-1 rounded-full text-xs font-mono bg-[#181f1b] text-gray-300 border border-[#27312c]">
@@ -47,7 +46,7 @@
         <div>
           <label class="block text-xs text-gray-400 mb-1.5">API Key (<span class="font-mono text-emerald-300">mauthapi</span>)</label>
           <div class="flex flex-col sm:flex-row gap-2">
-            <input id="pgApiKey" type="text" value="{{ user_key }}" placeholder="Paste your API key here..."
+            <input id="pgApiKey" type="text" value="" placeholder="Paste your user API key here..."
                    class="flex-1 px-3.5 py-2.5 rounded-xl bg-[#0b0e0c] border border-[#242e29] font-mono text-xs sm:text-sm text-amber-300 focus:outline-none focus:border-emerald-500" />
             <a href="{{ url_for('section_page', section_key='profile') }}"
                class="px-3.5 py-2.5 rounded-xl bg-[#181f1b] hover:bg-[#212a25] border border-[#28332d] text-xs font-semibold text-gray-200 text-center transition">
@@ -59,10 +58,10 @@
         <div class="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-center">
           <select id="pgEndpoint" onchange="onEndpointChange()"
                   class="sm:col-span-9 px-3.5 py-2.5 rounded-xl bg-[#0b0e0c] border border-[#242e29] font-mono text-xs sm:text-sm text-gray-100 focus:outline-none focus:border-emerald-500">
-            <option value="POST_GETNUM">POST /api/bridge/getnum</option>
-            <option value="GET_LIVEACCESS">GET /api/bridge/liveaccess</option>
-            <option value="GET_SUCCESS_OTP">GET /api/bridge/my-numbers</option>
-            <option value="GET_CONSOLE">GET /api/bridge/console</option>
+            <option value="POST_GETNUM">POST /api/v1/getnum</option>
+            <option value="GET_LIVEACCESS">GET /api/v1/liveaccess</option>
+            <option value="GET_MY_NUMBERS">GET /api/v1/my-numbers</option>
+            <option value="GET_CONSOLE">GET /api/v1/console</option>
           </select>
 
           <button type="button" onclick="runPlayground()" id="pgRunBtn"
@@ -90,28 +89,28 @@
         </div>
       </section>
 
-      <!-- Public API (token) -->
+      <!-- Public API Endpoints -->
       <section id="public-api" class="space-y-4 scroll-mt-6">
         <div class="card rounded-2xl p-5">
-          <h2 class="text-lg font-bold">Public API (token)</h2>
+          <h2 class="text-lg font-bold">API Endpoints</h2>
           <p class="text-xs sm:text-sm text-gray-400 mt-1.5 leading-relaxed">
-            Authenticated JSON endpoints for your panel. Send your key in the <code class="text-emerald-300">mauthapi</code> header and call them from your client or HTTP tool. Find and manage your API key on the Profile page. Try them live in the Playground above.
+            Public documentation of all available <code class="text-emerald-300">/api/v1</code> endpoints. Pass your user API key in the <code class="text-emerald-300">mauthapi</code> request header (or <code class="text-emerald-300">X-API-Key</code>). No secret or system token is exposed here.
           </p>
         </div>
 
-        <!-- 1. POST /api/bridge/getnum -->
+        <!-- 1. POST /api/v1/getnum -->
         <div id="ep-getnum" class="card rounded-2xl p-5 space-y-3.5 scroll-mt-6">
           <div class="flex items-center justify-between gap-2 flex-wrap">
             <div class="flex items-center gap-2 min-w-0">
               <span class="px-2 py-0.5 rounded-md bg-emerald-950 text-emerald-400 border border-emerald-700/40 font-mono text-xs font-bold">POST</span>
-              <span id="url-getnum" class="font-mono text-xs sm:text-sm text-gray-100 break-all">{{ site_base }}/api/bridge/getnum</span>
+              <span id="url-getnum" class="font-mono text-xs sm:text-sm text-gray-100 break-all">{{ site_base }}/getnum</span>
             </div>
             <button type="button" onclick="copyText('url-getnum', 'Endpoint URL copied!')"
                     class="px-3 py-1 rounded-lg bg-[#181f1b] hover:bg-[#222c26] border border-[#2a3630] text-xs font-semibold text-gray-200">
               Copy
             </button>
           </div>
-          <p class="text-sm text-gray-300">Allocate one number from a range — same as Get Number.</p>
+          <p class="text-sm text-gray-300">Allocate one number from a range.</p>
 
           <div>
             <div class="text-xs font-semibold text-gray-400 uppercase mb-1">Request body</div>
@@ -120,21 +119,21 @@
 
           <div>
             <div class="text-xs font-semibold text-gray-400 uppercase mb-1">Response</div>
-            <pre class="p-3 rounded-xl bg-[#0b0e0c] border border-[#202824] font-mono text-xs text-gray-200 overflow-x-auto">{ "ok": true, "item": { "full_number": "+447404333228", "country": "United Kingdom", "operator": "EE" } }</pre>
+            <pre class="p-3 rounded-xl bg-[#0b0e0c] border border-[#202824] font-mono text-xs text-gray-200 overflow-x-auto">{ "meta": { "code": 200, "status": "success" }, "data": { "full_number": "+447404333228", "country": "United Kingdom", "operator": "EE" } }</pre>
           </div>
 
           <ul class="text-xs text-gray-400 space-y-1 list-disc pl-4">
-            <li>Header: <code class="text-gray-200">mauthapi: &lt;your_api_key&gt;</code></li>
+            <li>Header: <code class="text-gray-200">mauthapi: &lt;your_user_api_key&gt;</code></li>
             <li>Returns allocated number details with expiry timer and rate info.</li>
           </ul>
         </div>
 
-        <!-- 2. GET /api/bridge/liveaccess -->
+        <!-- 2. GET /api/v1/liveaccess -->
         <div id="ep-liveaccess" class="card rounded-2xl p-5 space-y-3.5 scroll-mt-6">
           <div class="flex items-center justify-between gap-2 flex-wrap">
             <div class="flex items-center gap-2 min-w-0">
               <span class="px-2 py-0.5 rounded-md bg-cyan-950 text-cyan-300 border border-cyan-700/40 font-mono text-xs font-bold">GET</span>
-              <span id="url-liveaccess" class="font-mono text-xs sm:text-sm text-gray-100 break-all">{{ site_base }}/api/bridge/liveaccess</span>
+              <span id="url-liveaccess" class="font-mono text-xs sm:text-sm text-gray-100 break-all">{{ site_base }}/liveaccess</span>
             </div>
             <button type="button" onclick="copyText('url-liveaccess', 'Endpoint URL copied!')"
                     class="px-3 py-1 rounded-lg bg-[#181f1b] hover:bg-[#222c26] border border-[#2a3630] text-xs font-semibold text-gray-200">
@@ -149,14 +148,14 @@
           </div>
         </div>
 
-        <!-- 3. GET /api/bridge/my-numbers -->
-        <div id="ep-success-otp" class="card rounded-2xl p-5 space-y-3.5 scroll-mt-6">
+        <!-- 3. GET /api/v1/my-numbers -->
+        <div id="ep-my-numbers" class="card rounded-2xl p-5 space-y-3.5 scroll-mt-6">
           <div class="flex items-center justify-between gap-2 flex-wrap">
             <div class="flex items-center gap-2 min-w-0">
               <span class="px-2 py-0.5 rounded-md bg-cyan-950 text-cyan-300 border border-cyan-700/40 font-mono text-xs font-bold">GET</span>
-              <span id="url-success-otp" class="font-mono text-xs sm:text-sm text-gray-100 break-all">{{ site_base }}/api/bridge/my-numbers</span>
+              <span id="url-my-numbers" class="font-mono text-xs sm:text-sm text-gray-100 break-all">{{ site_base }}/my-numbers</span>
             </div>
-            <button type="button" onclick="copyText('url-success-otp', 'Endpoint URL copied!')"
+            <button type="button" onclick="copyText('url-my-numbers', 'Endpoint URL copied!')"
                     class="px-3 py-1 rounded-lg bg-[#181f1b] hover:bg-[#222c26] border border-[#2a3630] text-xs font-semibold text-gray-200">
               Copy
             </button>
@@ -165,27 +164,27 @@
 
           <div>
             <div class="text-xs font-semibold text-gray-400 uppercase mb-1">Response</div>
-            <pre class="p-3 rounded-xl bg-[#0b0e0c] border border-[#202824] font-mono text-xs text-gray-200 overflow-x-auto">{ "ok": true, "numbers": [], "balance": 0.0 }</pre>
+            <pre class="p-3 rounded-xl bg-[#0b0e0c] border border-[#202824] font-mono text-xs text-gray-200 overflow-x-auto">{ "meta": { "code": 200, "status": "success" }, "data": { "numbers": [], "balance": 0.0 } }</pre>
           </div>
         </div>
 
-        <!-- 4. GET /api/bridge/console -->
+        <!-- 4. GET /api/v1/console -->
         <div id="ep-console" class="card rounded-2xl p-5 space-y-3.5 scroll-mt-6">
           <div class="flex items-center justify-between gap-2 flex-wrap">
             <div class="flex items-center gap-2 min-w-0">
               <span class="px-2 py-0.5 rounded-md bg-cyan-950 text-cyan-300 border border-cyan-700/40 font-mono text-xs font-bold">GET</span>
-              <span id="url-console" class="font-mono text-xs sm:text-sm text-gray-100 break-all">{{ site_base }}/api/bridge/console</span>
+              <span id="url-console" class="font-mono text-xs sm:text-sm text-gray-100 break-all">{{ site_base }}/console</span>
             </div>
             <button type="button" onclick="copyText('url-console', 'Endpoint URL copied!')"
                     class="px-3 py-1 rounded-lg bg-[#181f1b] hover:bg-[#222c26] border border-[#2a3630] text-xs font-semibold text-gray-200">
               Copy
             </button>
           </div>
-          <p class="text-sm text-gray-300">Live feed of recent console hits.</p>
+          <p class="text-sm text-gray-300">Recent OTP hit logs for your account.</p>
 
           <div>
             <div class="text-xs font-semibold text-gray-400 uppercase mb-1">Response</div>
-            <pre class="p-3 rounded-xl bg-[#0b0e0c] border border-[#202824] font-mono text-xs text-gray-200 overflow-x-auto">{ "meta": { "code": 200, "status": "ok" }, "data": { "hits": [] } }</pre>
+            <pre class="p-3 rounded-xl bg-[#0b0e0c] border border-[#202824] font-mono text-xs text-gray-200 overflow-x-auto">{ "meta": { "code": 200, "status": "success" }, "data": { "hits": [] } }</pre>
           </div>
         </div>
       </section>
@@ -196,11 +195,11 @@
       <div class="card rounded-2xl p-4 lg:sticky lg:top-6 space-y-2">
         <div class="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">On this page</div>
         <a href="#playground" class="block text-xs py-1 text-gray-300 hover:text-emerald-400">Playground</a>
-        <a href="#public-api" class="block text-xs py-1 text-gray-300 hover:text-emerald-400">Public API (token)</a>
+        <a href="#public-api" class="block text-xs py-1 text-gray-300 hover:text-emerald-400">API Endpoints</a>
         <div class="pl-3 space-y-1 border-l border-[#222b26] mt-1">
           <a href="#ep-getnum" class="block text-xs py-0.5 text-gray-400 hover:text-emerald-400">POST /getnum</a>
           <a href="#ep-liveaccess" class="block text-xs py-0.5 text-gray-400 hover:text-emerald-400">GET /liveaccess</a>
-          <a href="#ep-success-otp" class="block text-xs py-0.5 text-gray-400 hover:text-emerald-400">GET /success-otp</a>
+          <a href="#ep-my-numbers" class="block text-xs py-0.5 text-gray-400 hover:text-emerald-400">GET /my-numbers</a>
           <a href="#ep-console" class="block text-xs py-0.5 text-gray-400 hover:text-emerald-400">GET /console</a>
         </div>
       </div>
@@ -258,15 +257,15 @@
       };
 
       if (ep === "POST_GETNUM") {
-        url = "/api/bridge/getnum";
+        url = "/api/v1/getnum";
         options.method = "POST";
         options.body = document.getElementById("pgRequestBody").value;
       } else if (ep === "GET_LIVEACCESS") {
-        url = "/api/bridge/liveaccess";
-      } else if (ep === "GET_SUCCESS_OTP") {
-        url = "/api/bridge/my-numbers";
+        url = "/api/v1/liveaccess";
+      } else if (ep === "GET_MY_NUMBERS") {
+        url = "/api/v1/my-numbers";
       } else if (ep === "GET_CONSOLE") {
-        url = "/api/bridge/console";
+        url = "/api/v1/console";
       }
 
       const res = await fetch(url, options);
