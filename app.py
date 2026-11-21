@@ -1,4 +1,5 @@
 import os
+import json
 import time
 import smtplib
 import secrets
@@ -13,12 +14,23 @@ from flask import (
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 
+try:
+    import firebase_admin
+    from firebase_admin import credentials, firestore
+except ImportError:
+    firebase_admin = None
+    credentials = None
+    firestore = None
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 
 DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel.db"))
 
-# ---------------- PRIVATE API TOKEN & UPSTREAM ENDPOINTS ----------------
+# ---------------- PANEL BRAND & PRIVATE API TOKEN ----------------
+PANEL_BRAND_NAME = os.environ.get("PANEL_BRAND_NAME", "SR 1").strip() or "SR 1"
+PANEL_OFF_MSG = f"{PANEL_BRAND_NAME} Panel is currently turned OFF by Admin."
+
 PRIVATE_API_TOKEN = os.environ.get("UPSTREAM_API_KEY", "YOUR_PRIVATE_API_TOKEN_HERE").strip()
 
 UPSTREAM_BASE_URL = os.environ.get(
@@ -69,6 +81,244 @@ SIDEBAR_ITEMS = [
     {"key": "payment", "label": "Payment", "group": "Account"},
     {"key": "api-docs", "label": "API Docs", "group": "Extra"},
 ]
+
+
+# ---------------- FIREBASE FIRESTORE HELPERS ----------------
+
+_FIRESTORE_CLIENT = None
+_FIRESTORE_READY = False
+
+
+def get_firestore_client():
+    global _FIRESTORE_CLIENT, _FIRESTORE_READY
+    if _FIRESTORE_READY:
+        return _FIRESTORE_CLIENT
+    _FIRESTORE_READY = True
+
+    if firebase_admin is None or credentials is None or firestore is None:
+        print("Firebase Warning: firebase-admin package is not installed.")
+        return None
+
+    raw_json = os.environ.get("FIREBASE_CREDENTIALS_JSON", "").strip()
+    if not raw_json:
+        print("Firebase Warning: FIREBASE_CREDENTIALS_JSON env var is empty.")
+        return None
+
+    try:
+        cred_dict = json.loads(raw_json)
+        if not firebase_admin._apps:
+            cred = credentials.Certificate(cred_dict)
+            firebase_admin.initialize_app(cred)
+        _FIRESTORE_CLIENT = firestore.client()
+        return _FIRESTORE_CLIENT
+    except Exception as e:
+        print("Firebase Init Error:", repr(e))
+        _FIRESTORE_CLIENT = None
+        return None
+
+
+def fs_set_doc(collection_name: str, doc_id: str, data: dict, merge: bool = True):
+    fs = get_firestore_client()
+    if not fs or not doc_id:
+        return
+    try:
+        payload = dict(data)
+        payload["updated_at_ts"] = time.time()
+        fs.collection(collection_name).document(str(doc_id)).set(payload, merge=merge)
+    except Exception as e:
+        print(f"Firestore set error [{collection_name}/{doc_id}]:", repr(e))
+
+
+def fs_delete_doc(collection_name: str, doc_id: str):
+    fs = get_firestore_client()
+    if not fs or not doc_id:
+        return
+    try:
+        fs.collection(collection_name).document(str(doc_id)).delete()
+    except Exception as e:
+        print(f"Firestore delete error [{collection_name}/{doc_id}]:", repr(e))
+
+
+def sync_user_to_firestore(email: str):
+    if not email:
+        return
+    conn = get_db()
+    row = conn.execute("SELECT * FROM users WHERE email = ?", (email.lower(),)).fetchone()
+    conn.close()
+    if row:
+        fs_set_doc("users", row["email"], dict(row), merge=True)
+
+
+def sync_agent_to_firestore(email: str):
+    if not email:
+        return
+    conn = get_db()
+    row = conn.execute("SELECT * FROM agents WHERE email = ?", (email.lower(),)).fetchone()
+    conn.close()
+    if row:
+        fs_set_doc("agents", row["email"], dict(row), merge=True)
+
+
+def sync_setting_to_firestore(key: str):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM settings WHERE k = ?", (key,)).fetchone()
+    conn.close()
+    if row:
+        fs_set_doc("settings", row["k"], dict(row), merge=True)
+
+
+def sync_withdrawal_to_firestore(req_id: str):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM withdrawals WHERE id = ?", (req_id,)).fetchone()
+    conn.close()
+    if row:
+        fs_set_doc("withdrawals", row["id"], dict(row), merge=True)
+
+
+def sync_payment_address_to_firestore(addr_id: str):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM payment_addresses WHERE id = ?", (addr_id,)).fetchone()
+    conn.close()
+    if row:
+        fs_set_doc("payment_addresses", row["id"], dict(row), merge=True)
+
+
+def sync_user_number_to_firestore(num_id: str):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM user_numbers WHERE id = ?", (num_id,)).fetchone()
+    conn.close()
+    if row:
+        fs_set_doc("user_numbers", row["id"], dict(row), merge=True)
+
+
+def sync_otp_log_to_firestore(log_id: int):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM otp_logs WHERE id = ?", (log_id,)).fetchone()
+    conn.close()
+    if row:
+        d = dict(row)
+        fs_set_doc("otp_logs", str(d["id"]), d, merge=True)
+
+
+def restore_sqlite_from_firestore_if_empty():
+    fs = get_firestore_client()
+    if not fs:
+        return
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+
+        # Restore settings
+        for doc in fs.collection("settings").stream():
+            d = doc.to_dict() or {}
+            k = d.get("k") or doc.id
+            v = d.get("v")
+            if k is not None and v is not None:
+                cur.execute("INSERT OR IGNORE INTO settings (k, v) VALUES (?, ?)", (str(k), str(v)))
+
+        # Restore agents
+        for doc in fs.collection("agents").stream():
+            d = doc.to_dict() or {}
+            em = (d.get("email") or doc.id or "").strip().lower()
+            if em and d.get("password_hash"):
+                cur.execute(
+                    "INSERT OR IGNORE INTO agents (email, password_hash, created_at) VALUES (?, ?, ?)",
+                    (em, d["password_hash"], d.get("created_at") or datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"))
+                )
+
+        # Restore users
+        for doc in fs.collection("users").stream():
+            d = doc.to_dict() or {}
+            em = (d.get("email") or doc.id or "").strip().lower()
+            if em and d.get("password_hash"):
+                cur.execute("""
+                    INSERT OR IGNORE INTO users (
+                        email, name, agent_email, password_hash, status, uid, api_key,
+                        api_enabled, api_key_created, member_since, last_login, balance,
+                        lifetime_earning, otp_count, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    em,
+                    d.get("name") or em.split("@")[0],
+                    (d.get("agent_email") or "").strip().lower(),
+                    d["password_hash"],
+                    d.get("status") or "ACTIVE",
+                    d.get("uid") or secrets.token_hex(5).upper(),
+                    d.get("api_key"),
+                    int(d.get("api_enabled") or 0),
+                    d.get("api_key_created"),
+                    d.get("member_since"),
+                    d.get("last_login"),
+                    float(d.get("balance") or 0.0),
+                    float(d.get("lifetime_earning") or 0.0),
+                    int(d.get("otp_count") or 0),
+                    d.get("created_at") or datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+                ))
+
+        # Restore rates
+        for doc in fs.collection("country_rates").stream():
+            d = doc.to_dict() or {}
+            c = d.get("country") or doc.id
+            if c and d.get("rate") is not None:
+                cur.execute("INSERT OR IGNORE INTO country_rates (country, rate) VALUES (?, ?)", (str(c), float(d["rate"])))
+
+        for doc in fs.collection("service_rates").stream():
+            d = doc.to_dict() or {}
+            s = d.get("service") or doc.id
+            if s and d.get("rate") is not None:
+                cur.execute("INSERT OR IGNORE INTO service_rates (service, rate) VALUES (?, ?)", (str(s), float(d["rate"])))
+
+        for doc in fs.collection("otp_rate_limits").stream():
+            d = doc.to_dict() or {}
+            s = d.get("service") or doc.id
+            if s and d.get("max_rate") is not None:
+                cur.execute("INSERT OR IGNORE INTO otp_rate_limits (service, max_rate) VALUES (?, ?)", (str(s), float(d["max_rate"])))
+
+        # Restore withdrawals
+        for doc in fs.collection("withdrawals").stream():
+            d = doc.to_dict() or {}
+            wid = d.get("id") or doc.id
+            if wid and d.get("user_email"):
+                cur.execute("""
+                    INSERT OR IGNORE INTO withdrawals (
+                        id, user_email, user_name, method, wallet_number, amount,
+                        status, reason, created_at, decided_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    str(wid),
+                    (d.get("user_email") or "").strip().lower(),
+                    d.get("user_name") or "",
+                    d.get("method") or "",
+                    d.get("wallet_number") or "",
+                    float(d.get("amount") or 0.0),
+                    d.get("status") or "PENDING",
+                    d.get("reason") or "",
+                    d.get("created_at") or "",
+                    d.get("decided_at") or "",
+                ))
+
+        # Restore payment addresses
+        for doc in fs.collection("payment_addresses").stream():
+            d = doc.to_dict() or {}
+            aid = d.get("id") or doc.id
+            if aid and d.get("user_email"):
+                cur.execute("""
+                    INSERT OR IGNORE INTO payment_addresses (
+                        id, user_email, gateway, label, address, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    str(aid),
+                    (d.get("user_email") or "").strip().lower(),
+                    d.get("gateway") or "",
+                    d.get("label") or "",
+                    d.get("address") or "",
+                    d.get("created_at") or "",
+                ))
+
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print("Firestore restore error:", repr(e))
 
 
 # ---------------- DATABASE HELPERS ----------------
@@ -240,6 +490,15 @@ def init_db():
     conn.commit()
     conn.close()
 
+    restore_sqlite_from_firestore_if_empty()
+
+    sync_setting_to_firestore("agent_mail_auto_account")
+    sync_setting_to_firestore("voltx_panel_active")
+    for c, r in get_country_rates().items():
+        fs_set_doc("country_rates", c, {"country": c, "rate": r}, merge=True)
+    for s, r in get_service_rates().items():
+        fs_set_doc("service_rates", s, {"service": s, "rate": r}, merge=True)
+
 
 def get_auto_account_flag() -> bool:
     conn = get_db()
@@ -256,6 +515,7 @@ def set_auto_account_flag(enabled: bool):
     )
     conn.commit()
     conn.close()
+    sync_setting_to_firestore("agent_mail_auto_account")
 
 
 def get_voltx_panel_flag() -> bool:
@@ -273,6 +533,18 @@ def set_voltx_panel_flag(enabled: bool):
     )
     conn.commit()
     conn.close()
+    sync_setting_to_firestore("voltx_panel_active")
+
+
+def panel_off_json(status_code: int = 503):
+    return jsonify({
+        "meta": {"code": status_code, "status": "off"},
+        "voltx_active": False,
+        "panel_active": False,
+        "panel_name": PANEL_BRAND_NAME,
+        "message": PANEL_OFF_MSG,
+        "data": {"hits": [], "services": []},
+    }), status_code
 
 
 def get_country_rates() -> dict:
@@ -348,6 +620,7 @@ def ensure_agent_exists(agent_email: str, password_plain: str = None):
         )
         conn.commit()
         conn.close()
+        sync_agent_to_firestore(agent_email)
 
 
 # ---------------- COMMON HELPERS ----------------
@@ -604,6 +877,7 @@ def login():
         )
         conn.commit()
         conn.close()
+        sync_user_to_firestore(email)
 
         session.clear()
         session["user_email"] = email
@@ -683,6 +957,7 @@ def register():
         ))
         conn.commit()
         conn.close()
+        sync_user_to_firestore(email)
 
         if auto_flag:
             send_agent_mail(user_data)
@@ -728,6 +1003,7 @@ def forgot_password():
             )
             conn.commit()
             conn.close()
+            fs_set_doc("password_resets", email, {"email": email, "code": code, "expires_ts": expires_ts}, merge=True)
 
             sent = send_email_smtp(
                 email,
@@ -765,6 +1041,9 @@ def forgot_password():
                     conn.execute("DELETE FROM password_resets WHERE email = ?", (email,))
                     conn.commit()
                     conn.close()
+                    sync_user_to_firestore(email)
+                    sync_agent_to_firestore(email)
+                    fs_delete_doc("password_resets", email)
                     flash("Password updated successfully! Please login.", "success")
                     return redirect(url_for("login"))
 
@@ -813,6 +1092,7 @@ def agent_panel(agent_email):
         otp_rate_limits=get_otp_rate_limits(),
         agent_service_rates=get_agent_service_rates(agent_email),
         base_service_rates=get_service_rates(),
+        panel_brand_name=PANEL_BRAND_NAME,
     )
 
 
@@ -842,6 +1122,7 @@ def agent_api_permission(agent_email):
         conn.execute("UPDATE users SET api_enabled = 0 WHERE email = ?", (user_email,))
         conn.commit()
         conn.close()
+        sync_user_to_firestore(user_email)
         flash(f"API permission disabled for {user_email}.", "success")
     else:
         api_key = user.get("api_key") or f"M{secrets.token_hex(6).upper()}"
@@ -852,6 +1133,7 @@ def agent_api_permission(agent_email):
         )
         conn.commit()
         conn.close()
+        sync_user_to_firestore(user_email)
         flash(f"API permission active for {user_email}! API Key is now visible in user's Profile.", "success")
 
     return redirect(url_for("agent_panel"))
@@ -877,6 +1159,7 @@ def agent_decide_user(agent_email):
         conn.execute("UPDATE users SET status = 'ACTIVE' WHERE email = ?", (user_email,))
         conn.commit()
         conn.close()
+        sync_user_to_firestore(user_email)
         user["status"] = "ACTIVE"
         send_agent_mail(user)
         flash(f"User {user_email} approved (ACTIVE).", "success")
@@ -885,6 +1168,7 @@ def agent_decide_user(agent_email):
         conn.execute("UPDATE users SET status = 'REJECTED' WHERE email = ?", (user_email,))
         conn.commit()
         conn.close()
+        sync_user_to_firestore(user_email)
         flash(f"User {user_email} rejected.", "success")
     else:
         flash("Invalid decision.", "error")
@@ -926,6 +1210,12 @@ def agent_set_service_rate(agent_email):
     )
     conn.commit()
     conn.close()
+    fs_set_doc(
+        "agent_service_rates",
+        f"{agent_email.lower()}__{service.lower()}",
+        {"agent_email": agent_email.lower(), "service": service, "rate": rate},
+        merge=True
+    )
 
     flash(f"Service rate updated for {service} (${rate:.3f}).", "success")
     return redirect(url_for("agent_panel"))
@@ -946,12 +1236,14 @@ def agent_toggle_user_status(agent_email, action):
         conn.execute("UPDATE users SET status = 'DEACTIVATED' WHERE email = ?", (user_email,))
         conn.commit()
         conn.close()
+        sync_user_to_firestore(user_email)
         flash(f"User {user_email} has been deactivated.", "success")
     elif action == "activate":
         conn = get_db()
         conn.execute("UPDATE users SET status = 'ACTIVE' WHERE email = ?", (user_email,))
         conn.commit()
         conn.close()
+        sync_user_to_firestore(user_email)
         flash(f"User {user_email} has been activated.", "success")
 
     return redirect(url_for("agent_panel"))
@@ -978,6 +1270,7 @@ def admin_panel():
         "admin_panel.html",
         agent_mail_auto_account=get_auto_account_flag(),
         voltx_panel_active=get_voltx_panel_flag(),
+        panel_brand_name=PANEL_BRAND_NAME,
         country_rates=get_country_rates(),
         service_rates=get_service_rates(),
         otp_rate_limits=get_otp_rate_limits(),
@@ -996,7 +1289,7 @@ def toggle_voltx_panel():
     new_state = not get_voltx_panel_flag()
     set_voltx_panel_flag(new_state)
     state_text = "ON" if new_state else "OFF"
-    flash(f"Voltx Panel is now {state_text}.", "success")
+    flash(f"{PANEL_BRAND_NAME} Panel is now {state_text}.", "success")
     return redirect(url_for("admin_panel"))
 
 
@@ -1026,6 +1319,7 @@ def admin_remove_agent():
     conn.execute("DELETE FROM agents WHERE email = ?", (agent_email,))
     conn.commit()
     conn.close()
+    fs_delete_doc("agents", agent_email)
 
     flash(f"Agent email '{agent_email}' removed.", "success")
     return redirect(url_for("admin_panel"))
@@ -1056,6 +1350,7 @@ def set_country_rate():
         conn.execute("INSERT OR REPLACE INTO country_rates (country, rate) VALUES (?, ?)", (country, rate))
         conn.commit()
         conn.close()
+        fs_set_doc("country_rates", country, {"country": country, "rate": rate}, merge=True)
         flash(f"Country rate updated for {country}.", "success")
     return redirect(url_for("admin_panel"))
 
@@ -1075,6 +1370,7 @@ def set_service_rate():
         conn.execute("INSERT OR REPLACE INTO service_rates (service, rate) VALUES (?, ?)", (service, rate))
         conn.commit()
         conn.close()
+        fs_set_doc("service_rates", service, {"service": service, "rate": rate}, merge=True)
         flash(f"Service rate updated for {service}.", "success")
     return redirect(url_for("admin_panel"))
 
@@ -1097,6 +1393,7 @@ def set_otp_rate_limit():
         )
         conn.commit()
         conn.close()
+        fs_set_doc("otp_rate_limits", service, {"service": service, "max_rate": max_rate}, merge=True)
         flash(f"OTP rate limit updated for {service}.", "success")
     return redirect(url_for("admin_panel"))
 
@@ -1106,7 +1403,9 @@ def set_otp_rate_limit():
 def decide_withdraw(req_id, decision):
     conn = get_db()
     w = conn.execute("SELECT * FROM withdrawals WHERE id = ?", (req_id,)).fetchone()
+    user_email_to_sync = None
     if w and w["status"] == "PENDING":
+        user_email_to_sync = w["user_email"]
         decided_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
         if decision == "approve":
             conn.execute(
@@ -1127,6 +1426,11 @@ def decide_withdraw(req_id, decision):
             flash(f"Withdraw {req_id} rejected and balance refunded.", "success")
         conn.commit()
     conn.close()
+
+    if w and w["status"] == "PENDING":
+        sync_withdrawal_to_firestore(req_id)
+        if user_email_to_sync:
+            sync_user_to_firestore(user_email_to_sync)
     return redirect(url_for("admin_panel"))
 
 
@@ -1151,6 +1455,7 @@ def manage_user_api_key(user, action):
         )
         conn.commit()
         conn.close()
+        sync_user_to_firestore(user["email"])
         return jsonify({
             "ok": True,
             "api_key": new_key,
@@ -1161,6 +1466,7 @@ def manage_user_api_key(user, action):
         conn.execute("UPDATE users SET api_key = NULL, api_enabled = 0 WHERE email = ?", (user["email"],))
         conn.commit()
         conn.close()
+        sync_user_to_firestore(user["email"])
         return jsonify({
             "ok": True,
             "api_key": None,
@@ -1173,6 +1479,9 @@ def manage_user_api_key(user, action):
 # ---------------- SHARED NUMBER & OTP LOGIC ----------------
 
 def _create_number_for_user(user_dict: dict, raw_range: str):
+    if not get_voltx_panel_flag():
+        return {"ok": False, "message": PANEL_OFF_MSG}
+
     clean_rid = str(raw_range or "").upper().replace("X", "").replace("+", "").strip()
     if not clean_rid:
         return {"ok": False, "message": "Please enter a valid range."}
@@ -1226,6 +1535,7 @@ def _create_number_for_user(user_dict: dict, raw_range: str):
     ))
     conn.commit()
     conn.close()
+    sync_user_number_to_firestore(num_id)
 
     return {"ok": True, "item": entry}
 
@@ -1239,10 +1549,13 @@ def _fetch_user_numbers_and_sync_otp(user_dict: dict):
     ).fetchall()
     items = [dict(r) for r in rows]
 
+    synced_num_ids = []
+    synced_log_ids = []
+
     api_token = get_api_token()
     active_items = [it for it in items if it["expires_ts"] > now and not it["otp_message"]]
 
-    if active_items and api_token:
+    if active_items and api_token and get_voltx_panel_flag():
         try:
             r = requests.get(SUCCESS_OTP_API_URL, headers=upstream_headers(api_token), timeout=10)
             otps = (r.json().get("data") or {}).get("otps") or []
@@ -1273,7 +1586,7 @@ def _fetch_user_numbers_and_sync_otp(user_dict: dict):
                                WHERE email = ?""",
                             (rate_used, rate_used, user_dict["email"])
                         )
-                        conn.execute(
+                        cur_log = conn.execute(
                             """INSERT INTO otp_logs (
                                 created_at, created_ts, user_email, agent_email,
                                 number_val, country, service, rate, message
@@ -1283,6 +1596,9 @@ def _fetch_user_numbers_and_sync_otp(user_dict: dict):
                                 it["full_number"], it["country"], service_sid, rate_used, msg_text
                             )
                         )
+                        synced_num_ids.append(it["id"])
+                        if cur_log.lastrowid:
+                            synced_log_ids.append(cur_log.lastrowid)
                         conn.commit()
                         break
         except Exception:
@@ -1291,6 +1607,13 @@ def _fetch_user_numbers_and_sync_otp(user_dict: dict):
     fresh_user = get_user_dict(user_dict["email"])
     current_balance = float(fresh_user["balance"]) if fresh_user else float(user_dict["balance"])
     conn.close()
+
+    if synced_num_ids or synced_log_ids:
+        sync_user_to_firestore(user_dict["email"])
+        for nid in synced_num_ids:
+            sync_user_number_to_firestore(nid)
+        for lid in synced_log_ids:
+            sync_otp_log_to_firestore(lid)
 
     formatted = []
     for it in items:
@@ -1363,6 +1686,12 @@ def _filter_liveaccess_5h(payload):
                     "INSERT OR REPLACE INTO liveaccess_seen (sid, range_val, first_seen_ts) VALUES (?, ?, ?)",
                     (sid, rng_str, now)
                 )
+                fs_set_doc(
+                    "liveaccess_seen",
+                    f"{sid}__{rng_str}".replace("/", "_"),
+                    {"sid": sid, "range_val": rng_str, "first_seen_ts": now},
+                    merge=True
+                )
                 valid_ranges.append(rng_str)
 
         if valid_ranges:
@@ -1385,17 +1714,14 @@ def _filter_liveaccess_5h(payload):
 @user_login_required
 def bridge_console(user):
     if not get_voltx_panel_flag():
-        return jsonify({
-            "meta": {"code": 503, "status": "off"},
-            "voltx_active": False,
-            "message": "Voltx Panel is currently OFF by Admin.",
-            "data": {"hits": []}
-        })
+        return panel_off_json(503)
     try:
         r = requests.get(CONSOLE_API_URL, headers=upstream_headers(), timeout=10)
         res = r.json()
         if isinstance(res, dict):
             res["voltx_active"] = True
+            res["panel_active"] = True
+            res["panel_name"] = PANEL_BRAND_NAME
         return jsonify(res)
     except Exception as e:
         return jsonify({"meta": {"code": 500, "status": "error"}, "voltx_active": True, "message": str(e), "data": {"hits": []}})
@@ -1404,9 +1730,16 @@ def bridge_console(user):
 @app.route("/api/bridge/liveaccess")
 @user_login_required
 def bridge_liveaccess(user):
+    if not get_voltx_panel_flag():
+        return panel_off_json(503)
     try:
         r = requests.get(LIVEACCESS_API_URL, headers=upstream_headers(), timeout=10)
-        return jsonify(_filter_liveaccess_5h(r.json()))
+        res = _filter_liveaccess_5h(r.json())
+        if isinstance(res, dict):
+            res["voltx_active"] = True
+            res["panel_active"] = True
+            res["panel_name"] = PANEL_BRAND_NAME
+        return jsonify(res)
     except Exception as e:
         return jsonify({"meta": {"code": 500, "status": "error"}, "message": str(e), "data": {"services": []}})
 
@@ -1414,6 +1747,8 @@ def bridge_liveaccess(user):
 @app.route("/api/bridge/getnum", methods=["POST"])
 @user_login_required
 def bridge_getnum(user):
+    if not get_voltx_panel_flag():
+        return panel_off_json(503)
     payload = request.get_json(silent=True) or {}
     raw_range = str(payload.get("range", "")).strip()
     return jsonify(_create_number_for_user(user, raw_range))
@@ -1423,7 +1758,13 @@ def bridge_getnum(user):
 @user_login_required
 def bridge_my_numbers(user):
     formatted, current_balance = _fetch_user_numbers_and_sync_otp(user)
-    return jsonify({"ok": True, "numbers": formatted, "balance": current_balance})
+    return jsonify({
+        "ok": True,
+        "numbers": formatted,
+        "balance": current_balance,
+        "panel_active": get_voltx_panel_flag(),
+        "panel_name": PANEL_BRAND_NAME,
+    })
 
 
 # ---------------- PUBLIC / USER API v1 ENDPOINTS ----------------
@@ -1431,6 +1772,8 @@ def bridge_my_numbers(user):
 @app.route("/api/v1/liveaccess", methods=["GET"])
 @public_api_key_required
 def api_v1_liveaccess(user):
+    if not get_voltx_panel_flag():
+        return panel_off_json(503)
     try:
         r = requests.get(LIVEACCESS_API_URL, headers=upstream_headers(), timeout=10)
         return jsonify(_filter_liveaccess_5h(r.json()))
@@ -1441,6 +1784,8 @@ def api_v1_liveaccess(user):
 @app.route("/api/v1/getnum", methods=["POST"])
 @public_api_key_required
 def api_v1_getnum(user):
+    if not get_voltx_panel_flag():
+        return panel_off_json(503)
     payload = request.get_json(silent=True) or request.form.to_dict() or {}
     raw_range = str(payload.get("range") or payload.get("rid") or "").strip()
     res = _create_number_for_user(user, raw_range)
@@ -1466,11 +1811,7 @@ def api_v1_my_numbers(user):
 @public_api_key_required
 def api_v1_console(user):
     if not get_voltx_panel_flag():
-        return jsonify({
-            "meta": {"code": 503, "status": "off"},
-            "message": "Voltx Panel is currently OFF.",
-            "data": {"hits": []}
-        }), 503
+        return panel_off_json(503)
     conn = get_db()
     logs = [dict(r) for r in conn.execute(
         "SELECT id, created_at, number_val, country, service, rate, message FROM otp_logs WHERE user_email = ? ORDER BY id DESC LIMIT 100",
@@ -1499,12 +1840,13 @@ def save_address(user):
         flash("Label and wallet/account number are required.", "error")
         return redirect(url_for("payment_page"))
 
+    addr_id = secrets.token_hex(5).upper()
     conn = get_db()
     conn.execute("""
         INSERT INTO payment_addresses (id, user_email, gateway, label, address, created_at)
         VALUES (?, ?, ?, ?, ?, ?)
     """, (
-        secrets.token_hex(5).upper(),
+        addr_id,
         user["email"],
         gateway,
         label,
@@ -1513,6 +1855,7 @@ def save_address(user):
     ))
     conn.commit()
     conn.close()
+    sync_payment_address_to_firestore(addr_id)
 
     flash("Payment address saved successfully!", "success")
     return redirect(url_for("payment_page"))
@@ -1547,6 +1890,7 @@ def payment_page(user):
             flash("Minimum withdraw is $0.50 and must not exceed your balance.", "error")
             return redirect(url_for("payment_page"))
 
+        withdraw_id = secrets.token_hex(5).upper()
         conn.execute(
             "UPDATE users SET balance = ROUND(balance - ?, 4) WHERE email = ?",
             (amount, user["email"])
@@ -1557,7 +1901,7 @@ def payment_page(user):
                 status, reason, created_at, decided_at
             ) VALUES (?, ?, ?, ?, ?, ?, 'PENDING', '', ?, '')
         """, (
-            secrets.token_hex(5).upper(),
+            withdraw_id,
             user["email"],
             user["name"],
             addr_row["gateway"],
@@ -1567,6 +1911,8 @@ def payment_page(user):
         ))
         conn.commit()
         conn.close()
+        sync_user_to_firestore(user["email"])
+        sync_withdrawal_to_firestore(withdraw_id)
 
         flash("Withdraw request submitted! Waiting for Admin approval.", "success")
         return redirect(url_for("payment_page"))
@@ -1588,6 +1934,7 @@ def payment_page(user):
         active="payment",
         addresses=user_addresses,
         withdrawals=user_withdraws,
+        panel_brand_name=PANEL_BRAND_NAME,
     )
 
 
@@ -1605,13 +1952,21 @@ def public_api_docs():
         active="api-docs",
         base_path=f"{get_base_url()}/api/v1",
         public_docs=True,
+        panel_brand_name=PANEL_BRAND_NAME,
     )
 
 
 @app.route("/dashboard")
 @user_login_required
 def dashboard(user):
-    return render_template("dashboard.html", user=user, sidebar_items=SIDEBAR_ITEMS, active="dashboard")
+    return render_template(
+        "dashboard.html",
+        user=user,
+        sidebar_items=SIDEBAR_ITEMS,
+        active="dashboard",
+        voltx_panel_active=get_voltx_panel_flag(),
+        panel_brand_name=PANEL_BRAND_NAME,
+    )
 
 
 @app.route("/page/<section_key>")
@@ -1626,22 +1981,55 @@ def section_page(user, section_key):
     if section_key not in valid:
         return redirect(url_for("dashboard"))
 
+    panel_active = get_voltx_panel_flag()
+
     if section_key == "profile":
-        return render_template("profile.html", user=user, sidebar_items=SIDEBAR_ITEMS, active="profile")
+        return render_template(
+            "profile.html",
+            user=user,
+            sidebar_items=SIDEBAR_ITEMS,
+            active="profile",
+            voltx_panel_active=panel_active,
+            panel_brand_name=PANEL_BRAND_NAME,
+        )
     if section_key == "get-number":
-        return render_template("get_number.html", user=user, sidebar_items=SIDEBAR_ITEMS, active="get-number")
+        return render_template(
+            "get_number.html",
+            user=user,
+            sidebar_items=SIDEBAR_ITEMS,
+            active="get-number",
+            voltx_panel_active=panel_active,
+            panel_brand_name=PANEL_BRAND_NAME,
+        )
     if section_key == "console":
         return render_template(
             "console.html",
             user=user,
             sidebar_items=SIDEBAR_ITEMS,
             active="console",
-            voltx_panel_active=get_voltx_panel_flag(),
+            voltx_panel_active=panel_active,
+            panel_brand_name=PANEL_BRAND_NAME,
         )
     if section_key == "access-list":
-        return render_template("access_list.html", user=user, sidebar_items=SIDEBAR_ITEMS, active=section_key, section=valid[section_key])
+        return render_template(
+            "access_list.html",
+            user=user,
+            sidebar_items=SIDEBAR_ITEMS,
+            active=section_key,
+            section=valid[section_key],
+            voltx_panel_active=panel_active,
+            panel_brand_name=PANEL_BRAND_NAME,
+        )
 
-    return render_template("section.html", user=user, sidebar_items=SIDEBAR_ITEMS, active=section_key, section=valid[section_key])
+    return render_template(
+        "section.html",
+        user=user,
+        sidebar_items=SIDEBAR_ITEMS,
+        active=section_key,
+        section=valid[section_key],
+        voltx_panel_active=panel_active,
+        panel_brand_name=PANEL_BRAND_NAME,
+    )
 
 
 @app.route("/logout")
