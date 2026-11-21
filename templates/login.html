@@ -1,20 +1,30 @@
 {% extends "base.html" %}
-{% block title %}ROCKET SMS HUB LOGIN{% endblock %}
+{% block title %}ROCKET SMS HUB Login{% endblock %}
 {% block content %}
 <div class="max-w-md mx-auto mt-10 card rounded-2xl p-6">
-  <h1 class="text-2xl font-bold mb-1">ROCKET SMS HUB LOGIN</h1>
+  <h1 class="text-2xl font-bold mb-1">ROCKET SMS HUB Login</h1>
   <p class="text-sm text-gray-400 mb-6">Login with User or Agent credentials</p>
 
   <form method="POST" class="space-y-4">
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Email Address (User / Agent Mail)</label>
-      <input type="email" name="email" required placeholder="name@example.com"
+      <label for="email" class="block text-xs text-gray-400 mb-1">Email Address (User / Agent Mail)</label>
+      <input id="email"
+             type="email"
+             name="email"
+             autocomplete="email"
+             required
+             placeholder="name@example.com"
              class="w-full px-3.5 py-2.5 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-sm focus:outline-none focus:border-emerald-500" />
     </div>
 
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Password</label>
-      <input type="password" name="password" required placeholder="••••••••"
+      <label for="password" class="block text-xs text-gray-400 mb-1">Password</label>
+      <input id="password"
+             type="password"
+             name="password"
+             autocomplete="current-password"
+             required
+             placeholder="••••••••"
              class="w-full px-3.5 py-2.5 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-sm focus:outline-none focus:border-emerald-500" />
     </div>
 
@@ -24,13 +34,13 @@
       </a>
     </div>
 
-    <button type="submit" class="w-full py-2.5 rounded-xl accent-btn text-white font-semibold text-sm">
+    <button type="submit" class="w-full py-2.5 rounded-xl accent-btn text-white font-semibold text-sm transition">
       Sign In →
     </button>
   </form>
 
   <p class="text-xs text-gray-400 mt-5 text-center">
-    New user? <a href="{{ url_for('register') }}" class="text-emerald-400 hover:underline">Account creat</a>
+    New user? <a href="{{ url_for('register') }}" class="text-emerald-400 hover:underline">Create account</a>
   </p>
 </div>
 {% endblock %}
