@@ -32,11 +32,43 @@ function formatTimer(sec) {
   return `${m}:${s}`;
 }
 
+function escapeAttr(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function escapeHtml(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function extractOtpValue(msg) {
+  const text = String(msg ?? '').trim();
+  const match = text.match(/\b(\d{4,8})\b/);
+  return match ? match[1] : text;
+}
+
 function copyText(txt, btn) {
-  navigator.clipboard.writeText(txt);
+  const val = String(txt ?? '');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(val).catch(() => {});
+  } else {
+    const ta = document.createElement('textarea');
+    ta.value = val;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+  }
   const old = btn.innerText;
   btn.innerText = 'Copied';
-  setTimeout(() => btn.innerText = old, 1000);
+  setTimeout(() => btn.innerText = old, 1200);
 }
 
 async function allocateNumber() {
@@ -97,8 +129,15 @@ function renderNumbers() {
       ? `<span class="px-2.5 py-1 rounded-lg bg-rose-950 text-rose-400 text-xs font-semibold">EXPIRED (15m)</span>`
       : `<span class="px-2.5 py-1 rounded-lg bg-amber-950/70 text-amber-300 font-mono text-xs font-semibold">⏳ ${formatTimer(n.remaining_seconds)}</span>`;
 
+    const otpToCopy = extractOtpValue(n.otp_message);
     const otpArea = n.otp_message
-      ? `<div class="p-3 rounded-xl bg-emerald-950/50 border border-emerald-600/40 text-emerald-200 text-sm font-medium">✅ OTP: ${n.otp_message}</div>`
+      ? `<div class="p-3 rounded-xl bg-emerald-950/50 border border-emerald-600/40 text-emerald-200 text-sm font-medium flex items-center justify-between gap-3">
+           <span class="break-all">✅ OTP: ${escapeHtml(n.otp_message)}</span>
+           <button type="button" onclick="copyText('${escapeAttr(otpToCopy)}', this)"
+                   class="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shrink-0">
+             Copy OTP
+           </button>
+         </div>`
       : (n.expired
           ? `<div class="text-xs text-rose-400">No OTP received within 15 minutes.</div>`
           : `<div class="text-xs text-gray-400 animate-pulse">Waiting for incoming OTP...</div>`);
@@ -107,15 +146,15 @@ function renderNumbers() {
       <div class="card rounded-2xl p-4 grid grid-cols-1 md:grid-cols-2 gap-4 items-center ${n.expired ? 'opacity-60' : ''}">
         <div class="space-y-1.5">
           <div class="flex items-center gap-2 flex-wrap">
-            <span class="font-mono text-lg font-bold text-white">${n.full_number}</span>
-            <button onclick="copyText('${n.no_plus_number}', this)"
+            <span class="font-mono text-lg font-bold text-white">${escapeHtml(n.full_number)}</span>
+            <button type="button" onclick="copyText('${escapeAttr(n.no_plus_number)}', this)"
                     class="px-2.5 py-1 rounded-lg bg-[#1a221e] text-xs text-emerald-300 hover:bg-[#232e28]">
               Copy
             </button>
             ${timerBadge}
           </div>
           <div class="text-xs text-gray-400">
-            Country: <span class="text-gray-200">${n.country}</span> • Operator: <span class="text-gray-200">${n.operator}</span> • Range: <span class="font-mono">${n.range}</span>
+            Country: <span class="text-gray-200">${escapeHtml(n.country)}</span> • Operator: <span class="text-gray-200">${escapeHtml(n.operator)}</span> • Range: <span class="font-mono">${escapeHtml(n.range)}</span>
           </div>
         </div>
 
@@ -127,7 +166,6 @@ function renderNumbers() {
   }).join('');
 }
 
-// প্রতি ১ সেকেন্ডে লোকাল কাউন্টডাউন কমানো
 setInterval(() => {
   cachedNumbers.forEach(n => {
     if (n.remaining_seconds > 0) {
@@ -138,7 +176,6 @@ setInterval(() => {
   renderNumbers();
 }, 1000);
 
-// প্রতি ৫ সেকেন্ডে API থেকে OTP চেক করা
 refreshNumbers();
 setInterval(refreshNumbers, 5000);
 </script>
