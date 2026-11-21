@@ -6,7 +6,7 @@ import sqlite3
 import requests
 from email.mime.text import MIMEText
 from functools import wraps
-from datetime import datetime, timedelta
+from datetime import datetime
 from flask import (
     Flask, render_template, request, redirect,
     url_for, session, flash, jsonify
@@ -190,6 +190,22 @@ def init_db():
     """)
 
     cur.execute("""
+        CREATE TABLE IF NOT EXISTS otp_rate_limits (
+            service TEXT PRIMARY KEY,
+            max_rate REAL NOT NULL
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS agent_service_rates (
+            agent_email TEXT NOT NULL,
+            service TEXT NOT NULL,
+            rate REAL NOT NULL,
+            PRIMARY KEY (agent_email, service)
+        )
+    """)
+
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS password_resets (
             email TEXT PRIMARY KEY,
             code TEXT NOT NULL,
@@ -236,6 +252,23 @@ def get_country_rates() -> dict:
 def get_service_rates() -> dict:
     conn = get_db()
     rows = conn.execute("SELECT service, rate FROM service_rates").fetchall()
+    conn.close()
+    return {r["service"]: float(r["rate"]) for r in rows}
+
+
+def get_otp_rate_limits() -> dict:
+    conn = get_db()
+    rows = conn.execute("SELECT service, max_rate FROM otp_rate_limits").fetchall()
+    conn.close()
+    return {r["service"]: float(r["max_rate"]) for r in rows}
+
+
+def get_agent_service_rates(agent_email: str) -> dict:
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT service, rate FROM agent_service_rates WHERE agent_email = ?",
+        ((agent_email or "").strip().lower(),)
+    ).fetchall()
     conn.close()
     return {r["service"]: float(r["rate"]) for r in rows}
 
@@ -303,13 +336,35 @@ def upstream_headers(token: str = None) -> dict:
     }
 
 
-def calculate_rate(country: str, service_sid: str = "") -> float:
+def calculate_rate(country: str, service_sid: str = "", agent_email: str = "") -> float:
     service_rates = get_service_rates()
     country_rates = get_country_rates()
+    limits = get_otp_rate_limits()
+
     if service_sid:
-        for k, v in service_rates.items():
+        svc_key = None
+        for k in service_rates.keys():
             if k.lower() == service_sid.strip().lower():
-                return float(v)
+                svc_key = k
+                break
+
+        if agent_email:
+            ag_rates = get_agent_service_rates(agent_email)
+            for ak, ar in ag_rates.items():
+                if ak.lower() == service_sid.strip().lower():
+                    rate_val = float(ar)
+                    for lk, lv in limits.items():
+                        if lk.lower() == service_sid.strip().lower():
+                            rate_val = min(rate_val, float(lv))
+                    return rate_val
+
+        if svc_key:
+            rate_val = float(service_rates[svc_key])
+            for lk, lv in limits.items():
+                if lk.lower() == svc_key.lower():
+                    rate_val = min(rate_val, float(lv))
+            return rate_val
+
     if country:
         for k, v in country_rates.items():
             if k.lower() == country.strip().lower():
@@ -430,20 +485,17 @@ def login():
         email = request.form.get("email", "").strip().lower()
         password = request.form.get("password", "")
 
-        # Admin Login
         if email == ADMIN_EMAIL and password == ADMIN_PASSWORD:
             session.clear()
             session["is_admin"] = True
             return redirect(url_for("admin_panel"))
 
-        # Agent Login
         agent_row = get_agent_row(email)
         if agent_row and check_password_hash(agent_row["password_hash"], password):
             session.clear()
             session["agent_email"] = email
             return redirect(url_for("agent_panel"))
 
-        # User Login
         user = get_user_dict(email)
         if not user or not check_password_hash(user["password_hash"], password):
             flash("Invalid email or password.", "error")
@@ -676,7 +728,49 @@ def agent_panel(agent_email):
         total_otp=total_otp,
         today_otp=today_otp,
         month_otp=month_otp,
+        otp_rate_limits=get_otp_rate_limits(),
+        agent_service_rates=get_agent_service_rates(agent_email),
+        base_service_rates=get_service_rates(),
     )
+
+
+@app.route("/agent/set-service-rate", methods=["POST"])
+@agent_login_required
+def agent_set_service_rate(agent_email):
+    service = request.form.get("service", "").strip()
+    try:
+        rate = float(request.form.get("rate", "0"))
+    except ValueError:
+        flash("Invalid rate amount.", "error")
+        return redirect(url_for("agent_panel"))
+
+    if not service or rate < 0:
+        flash("Please provide a valid service name and rate.", "error")
+        return redirect(url_for("agent_panel"))
+
+    limits = get_otp_rate_limits()
+    max_cap = None
+    for k, v in limits.items():
+        if k.lower() == service.lower():
+            max_cap = float(v)
+            break
+
+    if max_cap is not None and rate > max_cap:
+        flash(f"Rate (${rate:.3f}) exceeds Admin max limit (${max_cap:.3f}) for {service}.", "error")
+        return redirect(url_for("agent_panel"))
+
+    conn = get_db()
+    conn.execute(
+        """INSERT INTO agent_service_rates (agent_email, service, rate)
+           VALUES (?, ?, ?)
+           ON CONFLICT(agent_email, service) DO UPDATE SET rate = excluded.rate""",
+        (agent_email.lower(), service, rate)
+    )
+    conn.commit()
+    conn.close()
+
+    flash(f"Service rate updated for {service} (${rate:.3f}).", "success")
+    return redirect(url_for("agent_panel"))
 
 
 @app.route("/agent/user/<action>", methods=["POST"])
@@ -733,6 +827,7 @@ def admin_panel():
         agent_mail_auto_account=get_auto_account_flag(),
         country_rates=get_country_rates(),
         service_rates=get_service_rates(),
+        otp_rate_limits=get_otp_rate_limits(),
         otp_logs=otp_logs,
         withdrawals=withdrawals,
         users=users_dict,
@@ -846,6 +941,28 @@ def set_service_rate():
         conn.commit()
         conn.close()
         flash(f"Service rate updated for {service}.", "success")
+    return redirect(url_for("admin_panel"))
+
+
+@app.route("/admin/set-otp-rate-limit", methods=["POST"])
+@admin_login_required
+def set_otp_rate_limit():
+    service = request.form.get("service", "").strip()
+    try:
+        max_rate = float(request.form.get("max_rate", "0"))
+    except ValueError:
+        flash("Invalid max rate amount.", "error")
+        return redirect(url_for("admin_panel"))
+
+    if service and max_rate >= 0:
+        conn = get_db()
+        conn.execute(
+            "INSERT OR REPLACE INTO otp_rate_limits (service, max_rate) VALUES (?, ?)",
+            (service, max_rate)
+        )
+        conn.commit()
+        conn.close()
+        flash(f"OTP rate limit updated for {service}.", "success")
     return redirect(url_for("admin_panel"))
 
 
@@ -963,7 +1080,7 @@ def bridge_getnum(user):
     now = time.time()
     num_id = secrets.token_hex(6)
     range_str = raw_range or f"{clean_rid}XXX"
-    rate_val = calculate_rate(country, "")
+    rate_val = calculate_rate(country, "", user.get("agent_email", ""))
 
     entry = {
         "id": num_id,
@@ -1024,7 +1141,7 @@ def bridge_my_numbers(user):
                     if otp_num.endswith(num_clean) or num_clean.endswith(otp_num):
                         msg_text = otp.get("message", "")
                         service_sid = detect_service_from_message(msg_text)
-                        rate_used = calculate_rate(it["country"], service_sid)
+                        rate_used = calculate_rate(it["country"], service_sid, user.get("agent_email", ""))
                         now_utc = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
                         it["otp_message"] = msg_text
