@@ -1,15 +1,16 @@
 {% extends "base.html" %}
 {% block title %}Profile{% endblock %}
 {% block content %}
-{% set u_name = user.name if user and user.name else "Siam Vai" %}
+{% set u_name = user.name if user and user.name else "User" %}
 {% set u_email = user.email if user and user.email else "" %}
 {% set u_status = (user.status if user and user.status else "ACTIVE")|lower %}
-{% set u_earning = (user.lifetime_earning if user and user.lifetime_earning is not none else 3.28)|float %}
-{% set u_uid = user.uid if user and user.uid else "MNVIEB0LQZA" %}
-{% set u_api_key = user.api_key if user and user.api_key else "MW3QIWJQFUI" %}
-{% set u_member_since = user.member_since if user and user.member_since else "Jun 2026" %}
-{% set u_last_login = user.last_login if user and user.last_login else "20/11/2026, 23:39:00" %}
-{% set u_key_created = user.api_key_created if user and user.api_key_created else "24/08/2026, 10:47:49" %}
+{% set u_earning = (user.lifetime_earning if user and user.lifetime_earning is not none else 0.0)|float %}
+{% set u_uid = user.uid if user and user.uid else "" %}
+{% set u_api_enabled = (user.api_enabled == 1) if user else False %}
+{% set u_api_key = user.api_key if (user and u_api_enabled and user.api_key) else "" %}
+{% set u_member_since = user.member_since if user and user.member_since else "" %}
+{% set u_last_login = user.last_login if user and user.last_login else "" %}
+{% set u_key_created = user.api_key_created if user and user.api_key_created else "" %}
 
 <div class="max-w-5xl space-y-6">
   <!-- Top Header -->
@@ -67,10 +68,23 @@
   <div class="card rounded-2xl p-5">
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
       <div>
-        <h3 class="text-base font-bold">API Keys</h3>
+        <div class="flex items-center gap-2">
+          <h3 class="text-base font-bold">API Keys</h3>
+          {% if u_api_enabled %}
+            <span class="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-950 text-emerald-400 border border-emerald-700/40">
+              API Active
+            </span>
+          {% else %}
+            <span class="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-950 text-amber-300 border border-amber-700/40">
+              Locked
+            </span>
+          {% endif %}
+        </div>
         <p class="text-xs text-gray-400">Use this key to authenticate your API requests.</p>
       </div>
-      <div class="flex items-center gap-2">
+
+      {% if u_api_enabled %}
+      <div id="apiActionBtns" class="flex items-center gap-2">
         <button type="button" onclick="copyApiKey()"
                 class="px-3.5 py-2 rounded-xl bg-[#181f1b] hover:bg-[#202924] border border-[#2a352f] text-xs font-semibold text-gray-200 transition">
           Copy
@@ -84,17 +98,29 @@
           Revoke
         </button>
       </div>
+      {% endif %}
     </div>
 
     <div class="p-4 rounded-xl bg-[#0c0f0d] border border-[#202824] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-      <div>
-        <div id="apiKeyDisplay" class="font-mono text-sm font-semibold text-emerald-300 break-all">
-          {{ u_api_key if u_api_key else "REVOKED" }}
+      {% if u_api_enabled %}
+        <div>
+          <div id="apiKeyDisplay" class="font-mono text-sm font-semibold text-emerald-300 break-all">
+            {{ u_api_key if u_api_key else "REVOKED" }}
+          </div>
+          <div id="apiKeyCreated" class="text-xs text-gray-400 mt-1">
+            {% if u_key_created %}Created {{ u_key_created }}{% endif %}
+          </div>
         </div>
-        <div id="apiKeyCreated" class="text-xs text-gray-400 mt-1">
-          Created {{ u_key_created }}
+      {% else %}
+        <div>
+          <div class="font-mono text-sm font-semibold text-amber-300">
+            NOT ACTIVATED
+          </div>
+          <div class="text-xs text-gray-400 mt-1">
+            API access is currently disabled for your account. Please ask your Agent to enable <span class="text-gray-200 font-semibold">API Permission</span>.
+          </div>
         </div>
-      </div>
+      {% endif %}
     </div>
 
     <p id="apiKeyFeedback" class="text-xs text-emerald-400 mt-3 hidden"></p>
@@ -113,7 +139,7 @@
 
   function copyApiKey() {
     const keyText = document.getElementById("apiKeyDisplay")?.textContent?.trim();
-    if (!keyText || keyText === "REVOKED") {
+    if (!keyText || keyText === "REVOKED" || keyText === "NOT ACTIVATED") {
       showFeedback("No active API key to copy.", true);
       return;
     }
@@ -141,6 +167,9 @@
       document.getElementById("apiKeyDisplay").textContent = data.api_key || "REVOKED";
       if (data.created_at) {
         document.getElementById("apiKeyCreated").textContent = `Created ${data.created_at}`;
+      }
+      if (action === "revoke") {
+        setTimeout(() => location.reload(), 700);
       }
       showFeedback(data.message || `API key ${action}d successfully.`);
     } catch (e) {
