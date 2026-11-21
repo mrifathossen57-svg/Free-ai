@@ -2,10 +2,11 @@ import os
 import time
 import smtplib
 import secrets
+import sqlite3
 import requests
 from email.mime.text import MIMEText
 from functools import wraps
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import (
     Flask, render_template, request, redirect,
     url_for, session, flash, jsonify
@@ -15,8 +16,9 @@ from werkzeug.security import generate_password_hash, check_password_hash
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 
+DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel.db"))
+
 # ---------------- PRIVATE API TOKEN & UPSTREAM ENDPOINTS ----------------
-# শুধু আপনার Private API Token (mauthapi) নিচে বা Environment Variable (UPSTREAM_API_KEY)-এ বসান:
 PRIVATE_API_TOKEN = os.environ.get("UPSTREAM_API_KEY", "YOUR_PRIVATE_API_TOKEN_HERE").strip()
 
 UPSTREAM_BASE_URL = os.environ.get(
@@ -39,17 +41,7 @@ SMTP_USER = os.environ.get("SMTP_USER", "").strip()
 SMTP_PASS = os.environ.get("SMTP_PASS", "").strip()
 BASE_URL = os.environ.get("BASE_URL", "").strip()
 
-# Admin Switch: ON = Agent mail & auto account creation active, OFF = Account creation blocked
-AGENT_MAIL_AUTO_ACCOUNT = True
-
-USERS = {}
-AGENTS = {}
-USER_NUMBERS = {}      # email -> list of allocated numbers
-OTP_EARNING_LOGS = []  # admin ও user লগের জন্য
-WITHDRAWALS = []       # bKash / Nagad withdraw requests
-
-# Admin যেগুলো পরিবর্তন করতে পারবে:
-COUNTRY_RATES = {
+DEFAULT_COUNTRY_RATES = {
     "United Kingdom": 0.15,
     "Guinea": 0.10,
     "Ivory Coast": 0.10,
@@ -57,7 +49,7 @@ COUNTRY_RATES = {
     "Default": 0.05,
 }
 
-SERVICE_RATES = {
+DEFAULT_SERVICE_RATES = {
     "WhatsApp": 0.20,
     "Facebook": 0.12,
     "TikTok": 0.12,
@@ -76,6 +68,219 @@ SIDEBAR_ITEMS = [
     {"key": "api-docs", "label": "API Docs", "group": "Extra"},
 ]
 
+
+# ---------------- DATABASE HELPERS ----------------
+
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            k TEXT PRIMARY KEY,
+            v TEXT NOT NULL
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS agents (
+            email TEXT PRIMARY KEY,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            email TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            agent_email TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'ACTIVE',
+            uid TEXT NOT NULL,
+            api_key TEXT,
+            api_key_created TEXT,
+            member_since TEXT,
+            last_login TEXT,
+            balance REAL NOT NULL DEFAULT 0.0,
+            lifetime_earning REAL NOT NULL DEFAULT 0.0,
+            otp_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS user_numbers (
+            id TEXT PRIMARY KEY,
+            user_email TEXT NOT NULL,
+            range_val TEXT,
+            full_number TEXT,
+            national_number TEXT,
+            no_plus_number TEXT,
+            country TEXT,
+            operator TEXT,
+            country_rate REAL DEFAULT 0.0,
+            created_ts REAL NOT NULL,
+            expires_ts REAL NOT NULL,
+            otp_message TEXT,
+            earned_amount REAL DEFAULT 0.0
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS otp_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            created_ts REAL NOT NULL,
+            user_email TEXT NOT NULL,
+            agent_email TEXT NOT NULL,
+            number_val TEXT,
+            country TEXT,
+            service TEXT,
+            rate REAL DEFAULT 0.0,
+            message TEXT
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS withdrawals (
+            id TEXT PRIMARY KEY,
+            user_email TEXT NOT NULL,
+            user_name TEXT NOT NULL,
+            method TEXT NOT NULL,
+            wallet_number TEXT NOT NULL,
+            amount REAL NOT NULL,
+            status TEXT NOT NULL DEFAULT 'PENDING',
+            reason TEXT DEFAULT '',
+            created_at TEXT NOT NULL,
+            decided_at TEXT DEFAULT ''
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS payment_addresses (
+            id TEXT PRIMARY KEY,
+            user_email TEXT NOT NULL,
+            gateway TEXT NOT NULL,
+            label TEXT NOT NULL,
+            address TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS country_rates (
+            country TEXT PRIMARY KEY,
+            rate REAL NOT NULL
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS service_rates (
+            service TEXT PRIMARY KEY,
+            rate REAL NOT NULL
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS password_resets (
+            email TEXT PRIMARY KEY,
+            code TEXT NOT NULL,
+            expires_ts REAL NOT NULL
+        )
+    """)
+
+    cur.execute("INSERT OR IGNORE INTO settings (k, v) VALUES ('agent_mail_auto_account', '1')")
+
+    for c, r in DEFAULT_COUNTRY_RATES.items():
+        cur.execute("INSERT OR IGNORE INTO country_rates (country, rate) VALUES (?, ?)", (c, r))
+
+    for s, r in DEFAULT_SERVICE_RATES.items():
+        cur.execute("INSERT OR IGNORE INTO service_rates (service, rate) VALUES (?, ?)", (s, r))
+
+    conn.commit()
+    conn.close()
+
+
+
+def get_auto_account_flag() -> bool:
+    conn = get_db()
+    row = conn.execute("SELECT v FROM settings WHERE k = 'agent_mail_auto_account'").fetchone()
+    conn.close()
+    return (row["v"] == "1") if row else True
+
+
+def set_auto_account_flag(enabled: bool):
+    conn = get_db()
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (k, v) VALUES ('agent_mail_auto_account', ?)",
+        ("1" if enabled else "0",)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_country_rates() -> dict:
+    conn = get_db()
+    rows = conn.execute("SELECT country, rate FROM country_rates").fetchall()
+    conn.close()
+    return {r["country"]: float(r["rate"]) for r in rows}
+
+
+def get_service_rates() -> dict:
+    conn = get_db()
+    rows = conn.execute("SELECT service, rate FROM service_rates").fetchall()
+    conn.close()
+    return {r["service"]: float(r["rate"]) for r in rows}
+
+
+def get_user_dict(email: str):
+    if not email:
+        return None
+    conn = get_db()
+    row = conn.execute("SELECT * FROM users WHERE email = ?", (email.lower(),)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_all_users_dict() -> dict:
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM users ORDER BY rowid DESC").fetchall()
+    conn.close()
+    return {r["email"]: dict(r) for r in rows}
+
+
+def get_agent_row(email: str):
+    if not email:
+        return None
+    conn = get_db()
+    row = conn.execute("SELECT * FROM agents WHERE email = ?", (email.lower(),)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def ensure_agent_exists(agent_email: str, password_plain: str = None):
+    agent_email = (agent_email or "").strip().lower()
+    if not agent_email:
+        return
+    if not get_agent_row(agent_email):
+        pw = password_plain or DEFAULT_AGENT_PASS
+        conn = get_db()
+        conn.execute(
+            "INSERT OR IGNORE INTO agents (email, password_hash, created_at) VALUES (?, ?, ?)",
+            (agent_email, generate_password_hash(pw), datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"))
+        )
+        conn.commit()
+        conn.close()
+
+
+# ---------------- COMMON HELPERS ----------------
 
 def get_base_url():
     if BASE_URL:
@@ -99,83 +304,88 @@ def upstream_headers(token: str = None) -> dict:
 
 
 def calculate_rate(country: str, service_sid: str = "") -> float:
-    """Service Rate থাকলে আগে সেটি নেয়, না থাকলে Country Rate, তা না থাকলে Default Rate"""
+    service_rates = get_service_rates()
+    country_rates = get_country_rates()
     if service_sid:
-        for k, v in SERVICE_RATES.items():
+        for k, v in service_rates.items():
             if k.lower() == service_sid.strip().lower():
                 return float(v)
     if country:
-        for k, v in COUNTRY_RATES.items():
+        for k, v in country_rates.items():
             if k.lower() == country.strip().lower():
                 return float(v)
-    return float(COUNTRY_RATES.get("Default", 0.05))
+    return float(country_rates.get("Default", 0.05))
 
 
 def detect_service_from_message(msg_text: str) -> str:
     low = (msg_text or "").lower()
-    for s in SERVICE_RATES.keys():
+    for s in get_service_rates().keys():
         if s.lower() in low:
             return s
     return "OTP"
 
 
-def send_agent_mail(user):
-    agent_email = user["agent_email"]
-    base = get_base_url()
-    login_url = f"{base}/login"
-
-    subject = f"Auto Account Created: {user['name']} ({user['email']})"
-    body = (
-        f"A new user account has been created automatically.\n\n"
-        f"User Name: {user['name']}\n"
-        f"User Email: {user['email']}\n"
-        f"Status: ACTIVE (Auto)\n"
-        f"Created At: {user['created_at']}\n\n"
-        f"Login URL: {login_url}\n"
-    )
-
+def send_email_smtp(to_email: str, subject: str, body: str) -> bool:
     if not (SMTP_HOST and SMTP_USER and SMTP_PASS):
         print("SMTP Warning: SMTP_HOST, SMTP_USER, or SMTP_PASS is not configured.")
         return False
-
     try:
         msg = MIMEText(body)
         msg["Subject"] = subject
         msg["From"] = SMTP_USER
-        msg["To"] = agent_email
+        msg["To"] = to_email
 
         if SMTP_PORT == 465:
             with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=15) as server:
                 server.login(SMTP_USER, SMTP_PASS)
-                server.sendmail(SMTP_USER, [agent_email], msg.as_string())
+                server.sendmail(SMTP_USER, [to_email], msg.as_string())
         else:
             with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
                 server.ehlo()
                 server.starttls()
                 server.ehlo()
                 server.login(SMTP_USER, SMTP_PASS)
-                server.sendmail(SMTP_USER, [agent_email], msg.as_string())
-
-        print(f"Agent mail sent successfully to {agent_email}")
+                server.sendmail(SMTP_USER, [to_email], msg.as_string())
         return True
     except Exception as e:
         print("SMTP Error:", repr(e))
         return False
 
 
-# ---------------- PRIVATE LOGIN GUARDS ----------------
+def send_agent_mail(user: dict):
+    agent_email = user["agent_email"]
+    login_url = f"{get_base_url()}/login"
+    subject = f"Auto Account Created: {user['name']} ({user['email']})"
+    body = (
+        f"A new user account has been created automatically.\n\n"
+        f"User Name: {user['name']}\n"
+        f"User Email: {user['email']}\n"
+        f"Status: {user['status']}\n"
+        f"Created At: {user['created_at']}\n\n"
+        f"Login URL: {login_url}\n"
+    )
+    return send_email_smtp(agent_email, subject, body)
+
+
+# ---------------- LOGIN GUARDS ----------------
 
 def user_login_required(f):
-    """অ্যাকাউন্ট লগইন ছাড়া প্যানেলের কোনো পেজ বা API দেখা যাবে না"""
     @wraps(f)
     def decorated(*args, **kwargs):
         email = session.get("user_email")
-        if not email or email not in USERS:
+        user = get_user_dict(email) if email else None
+        if not user:
             if request.path.startswith("/api/"):
                 return jsonify({"ok": False, "message": "Login required."}), 401
             flash("Please login to your account first.", "error")
             return redirect(url_for("login"))
-        return f(USERS[email], *args, **kwargs)
+        if user["status"] != "ACTIVE":
+            session.pop("user_email", None)
+            if request.path.startswith("/api/"):
+                return jsonify({"ok": False, "message": f"Account is {user['status']}."}), 403
+            flash(f"Your account is {user['status']}. Contact Agent/Admin.", "error")
+            return redirect(url_for("login"))
+        return f(user, *args, **kwargs)
     return decorated
 
 
@@ -200,19 +410,22 @@ def admin_login_required(f):
     return decorated
 
 
+# ---------------- AUTH & FORGOT PASSWORD ----------------
+
 @app.route("/")
 def index():
     if session.get("is_admin"):
         return redirect(url_for("admin_panel"))
     if session.get("agent_email"):
         return redirect(url_for("agent_panel"))
-    if session.get("user_email") in USERS:
+    if session.get("user_email") and get_user_dict(session.get("user_email")):
         return redirect(url_for("dashboard"))
     return redirect(url_for("login"))
 
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
+    auto_flag = get_auto_account_flag()
     if request.method == "POST":
         email = request.form.get("email", "").strip().lower()
         password = request.form.get("password", "")
@@ -224,47 +437,51 @@ def login():
             return redirect(url_for("admin_panel"))
 
         # Agent Login
-        if email in AGENTS:
-            if check_password_hash(AGENTS[email], password):
-                session.clear()
-                session["agent_email"] = email
-                return redirect(url_for("agent_panel"))
-            flash("Invalid agent email or password.", "error")
-            return redirect(url_for("login"))
-
-        is_assigned_agent = any(u["agent_email"] == email for u in USERS.values())
-        if is_assigned_agent and password == DEFAULT_AGENT_PASS:
-            AGENTS[email] = generate_password_hash(password)
+        agent_row = get_agent_row(email)
+        if agent_row and check_password_hash(agent_row["password_hash"], password):
             session.clear()
             session["agent_email"] = email
             return redirect(url_for("agent_panel"))
 
         # User Login
-        user = USERS.get(email)
+        user = get_user_dict(email)
         if not user or not check_password_hash(user["password_hash"], password):
             flash("Invalid email or password.", "error")
             return redirect(url_for("login"))
 
+        if user["status"] == "DEACTIVATED":
+            flash("Your account has been DEACTIVATED by your Agent/Admin.", "error")
+            return redirect(url_for("login"))
+        if user["status"] == "PENDING":
+            flash("Your account is PENDING Admin approval.", "error")
+            return redirect(url_for("login"))
+        if user["status"] == "REJECTED":
+            flash("Your account was REJECTED by Admin.", "error")
+            return redirect(url_for("login"))
+
         now_dt = datetime.now()
-        user["last_login"] = now_dt.strftime("%d/%m/%Y, %H:%M:%S")
-        if "member_since" not in user:
-            user["member_since"] = now_dt.strftime("%b %Y")
-        if "api_key_created" not in user:
-            user["api_key_created"] = now_dt.strftime("%d/%m/%Y, %H:%M:%S")
+        last_login_str = now_dt.strftime("%d/%m/%Y, %H:%M:%S")
+        member_since_str = user["member_since"] or now_dt.strftime("%b %Y")
+        api_created_str = user["api_key_created"] or last_login_str
+
+        conn = get_db()
+        conn.execute(
+            "UPDATE users SET last_login = ?, member_since = ?, api_key_created = ? WHERE email = ?",
+            (last_login_str, member_since_str, api_created_str, email)
+        )
+        conn.commit()
+        conn.close()
 
         session.clear()
         session["user_email"] = email
         return redirect(url_for("dashboard"))
 
-    return render_template("login.html", agent_mail_auto_account=AGENT_MAIL_AUTO_ACCOUNT)
+    return render_template("login.html", agent_mail_auto_account=auto_flag)
 
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
-    if not AGENT_MAIL_AUTO_ACCOUNT:
-        flash("Account creation is currently OFF by Admin.", "error")
-        return redirect(url_for("login"))
-
+    auto_flag = get_auto_account_flag()
     if request.method == "POST":
         name = request.form.get("name", "").strip()
         email = request.form.get("email", "").strip().lower()
@@ -274,40 +491,137 @@ def register():
         if not name or not email or not agent_email or not password:
             flash("All fields are required.", "error")
             return redirect(url_for("register"))
-        if email in USERS:
+
+        if get_user_dict(email):
             flash("An account with this email already exists.", "error")
             return redirect(url_for("register"))
 
-        if agent_email not in AGENTS:
-            AGENTS[agent_email] = generate_password_hash(DEFAULT_AGENT_PASS)
+        ensure_agent_exists(agent_email, DEFAULT_AGENT_PASS)
 
+        status = "ACTIVE" if auto_flag else "PENDING"
         now_dt = datetime.now()
-        user = {
-            "name": name,
+        now_str = now_dt.strftime("%d/%m/%Y, %H:%M:%S")
+        created_utc = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+
+        user_data = {
             "email": email,
+            "name": name,
             "agent_email": agent_email,
             "password_hash": generate_password_hash(password),
-            "status": "ACTIVE",
+            "status": status,
             "uid": secrets.token_hex(5).upper(),
             "api_key": f"M{secrets.token_hex(6).upper()}",
-            "api_key_created": now_dt.strftime("%d/%m/%Y, %H:%M:%S"),
+            "api_key_created": now_str,
             "member_since": now_dt.strftime("%b %Y"),
-            "last_login": now_dt.strftime("%d/%m/%Y, %H:%M:%S"),
-            "balance": 0.00,
-            "lifetime_earning": 0.00,
+            "last_login": now_str,
+            "balance": 0.0,
+            "lifetime_earning": 0.0,
             "otp_count": 0,
-            "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+            "created_at": created_utc,
         }
-        USERS[email] = user
-        USER_NUMBERS[email] = []
-        session.clear()
-        session["user_email"] = email
 
-        send_agent_mail(user)
-        flash("Account created automatically! Welcome to Dashboard.", "success")
-        return redirect(url_for("dashboard"))
+        conn = get_db()
+        conn.execute("""
+            INSERT INTO users (
+                email, name, agent_email, password_hash, status, uid, api_key,
+                api_key_created, member_since, last_login, balance, lifetime_earning,
+                otp_count, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            user_data["email"], user_data["name"], user_data["agent_email"],
+            user_data["password_hash"], user_data["status"], user_data["uid"],
+            user_data["api_key"], user_data["api_key_created"], user_data["member_since"],
+            user_data["last_login"], user_data["balance"], user_data["lifetime_earning"],
+            user_data["otp_count"], user_data["created_at"]
+        ))
+        conn.commit()
+        conn.close()
 
-    return render_template("register.html", agent_mail_auto_account=AGENT_MAIL_AUTO_ACCOUNT)
+        if auto_flag:
+            send_agent_mail(user_data)
+            session.clear()
+            session["user_email"] = email
+            flash("Account created automatically! Welcome to Dashboard.", "success")
+            return redirect(url_for("dashboard"))
+        else:
+            flash("Account submitted! Waiting for Admin approval.", "success")
+            return redirect(url_for("login"))
+
+    return render_template("register.html", agent_mail_auto_account=auto_flag)
+
+
+@app.route("/forgot-password", methods=["GET", "POST"])
+def forgot_password():
+    step = "request_code"
+    target_email = request.args.get("email", "").strip().lower()
+
+    if request.method == "POST":
+        action = request.form.get("action", "send_code")
+        email = request.form.get("email", "").strip().lower()
+        target_email = email
+
+        if action == "send_code":
+            if not email:
+                flash("Please enter your email address.", "error")
+                return redirect(url_for("forgot_password"))
+
+            user = get_user_dict(email)
+            agent = get_agent_row(email)
+            if not user and not agent:
+                flash("No account found with this email.", "error")
+                return redirect(url_for("forgot_password"))
+
+            code = f"{secrets.randbelow(900000) + 100000}"
+            expires_ts = time.time() + 15 * 60
+
+            conn = get_db()
+            conn.execute(
+                "INSERT OR REPLACE INTO password_resets (email, code, expires_ts) VALUES (?, ?, ?)",
+                (email, code, expires_ts)
+            )
+            conn.commit()
+            conn.close()
+
+            sent = send_email_smtp(
+                email,
+                "Password Reset Verification Code",
+                f"Your password reset code is: {code}\n\nThis code will expire in 15 minutes."
+            )
+            if sent:
+                flash("Verification code sent to your email!", "success")
+            else:
+                flash(f"SMTP not configured. Test Reset Code: {code}", "success")
+            step = "reset_password"
+
+        elif action == "reset_password":
+            code = request.form.get("code", "").strip()
+            new_password = request.form.get("new_password", "")
+            confirm_password = request.form.get("confirm_password", "")
+
+            if not email or not code or not new_password:
+                flash("Email, code, and new password are required.", "error")
+                step = "reset_password"
+            elif new_password != confirm_password:
+                flash("Passwords do not match.", "error")
+                step = "reset_password"
+            else:
+                conn = get_db()
+                row = conn.execute("SELECT * FROM password_resets WHERE email = ?", (email,)).fetchone()
+                if not row or row["code"] != code or time.time() > row["expires_ts"]:
+                    conn.close()
+                    flash("Invalid or expired reset code.", "error")
+                    step = "reset_password"
+                else:
+                    pw_hash = generate_password_hash(new_password)
+                    conn.execute("UPDATE users SET password_hash = ? WHERE email = ?", (pw_hash, email))
+                    conn.execute("UPDATE agents SET password_hash = ? WHERE email = ?", (pw_hash, email))
+                    conn.execute("DELETE FROM password_resets WHERE email = ?", (email,))
+                    conn.commit()
+                    conn.close()
+                    flash("Password updated successfully! Please login.", "success")
+                    return redirect(url_for("login"))
+
+    return render_template("forgot_password.html", step=step, email=target_email)
 
 
 # ---------------- AGENT PANEL ----------------
@@ -315,33 +629,157 @@ def register():
 @app.route("/agent-panel")
 @agent_login_required
 def agent_panel(agent_email):
-    requests_list = [u for u in USERS.values() if u["agent_email"] == agent_email]
-    return render_template("agent_panel.html", agent_email=agent_email, requests_list=requests_list)
+    conn = get_db()
+    agent_users = [dict(r) for r in conn.execute(
+        "SELECT * FROM users WHERE agent_email = ? ORDER BY rowid DESC", (agent_email,)
+    ).fetchall()]
+
+    now_ts = time.time()
+    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    month_start = now_ts - (30 * 24 * 3600)
+
+    total_otp = conn.execute(
+        "SELECT COUNT(*) AS cnt FROM otp_logs WHERE agent_email = ?", (agent_email,)
+    ).fetchone()["cnt"]
+
+    today_otp = conn.execute(
+        "SELECT COUNT(*) AS cnt FROM otp_logs WHERE agent_email = ? AND created_ts >= ?",
+        (agent_email, today_start)
+    ).fetchone()["cnt"]
+
+    month_otp = conn.execute(
+        "SELECT COUNT(*) AS cnt FROM otp_logs WHERE agent_email = ? AND created_ts >= ?",
+        (agent_email, month_start)
+    ).fetchone()["cnt"]
+
+    conn.close()
+
+    return render_template(
+        "agent_panel.html",
+        agent_email=agent_email,
+        requests_list=agent_users,
+        user_count=len(agent_users),
+        total_otp=total_otp,
+        today_otp=today_otp,
+        month_otp=month_otp,
+    )
 
 
-# ---------------- ADMIN PANEL (SWITCH + RATES + OTP LOGS + WITHDRAWALS) ----------------
+@app.route("/agent/user/<action>", methods=["POST"])
+@agent_login_required
+def agent_toggle_user_status(agent_email, action):
+    user_email = request.form.get("user_email", "").strip().lower()
+    user = get_user_dict(user_email)
+
+    if not user or user["agent_email"] != agent_email:
+        flash("User not found or not under your agent email.", "error")
+        return redirect(url_for("agent_panel"))
+
+    if action == "deactivate":
+        conn = get_db()
+        conn.execute("UPDATE users SET status = 'DEACTIVATED' WHERE email = ?", (user_email,))
+        conn.commit()
+        conn.close()
+        flash(f"User {user_email} has been deactivated.", "success")
+    elif action == "activate":
+        conn = get_db()
+        conn.execute("UPDATE users SET status = 'ACTIVE' WHERE email = ?", (user_email,))
+        conn.commit()
+        conn.close()
+        flash(f"User {user_email} has been activated.", "success")
+
+    return redirect(url_for("agent_panel"))
+
+
+# ---------------- ADMIN PANEL ----------------
 
 @app.route("/admin")
 @admin_login_required
 def admin_panel():
+    conn = get_db()
+    users_dict = get_all_users_dict()
+    agents_list = [dict(r) for r in conn.execute("SELECT * FROM agents ORDER BY rowid DESC").fetchall()]
+    otp_logs = [dict(r) for r in conn.execute("SELECT * FROM otp_logs ORDER BY id DESC LIMIT 200").fetchall()]
+    withdrawals = [dict(r) for r in conn.execute("SELECT * FROM withdrawals ORDER BY rowid DESC").fetchall()]
+    conn.close()
+
     return render_template(
         "admin_panel.html",
-        agent_mail_auto_account=AGENT_MAIL_AUTO_ACCOUNT,
-        country_rates=COUNTRY_RATES,
-        service_rates=SERVICE_RATES,
-        otp_logs=OTP_EARNING_LOGS,
-        withdrawals=WITHDRAWALS,
-        users=USERS,
+        agent_mail_auto_account=get_auto_account_flag(),
+        country_rates=get_country_rates(),
+        service_rates=get_service_rates(),
+        otp_logs=otp_logs,
+        withdrawals=withdrawals,
+        users=users_dict,
+        agents=agents_list,
     )
+
+
+@app.route("/admin/add-agent", methods=["POST"])
+@admin_login_required
+def admin_add_agent():
+    agent_email = request.form.get("agent_email", "").strip().lower()
+    agent_pass = request.form.get("agent_password", "").strip() or DEFAULT_AGENT_PASS
+    if not agent_email:
+        flash("Agent email is required.", "error")
+        return redirect(url_for("admin_panel"))
+
+    ensure_agent_exists(agent_email, agent_pass)
+    flash(f"Agent email '{agent_email}' added/available.", "success")
+    return redirect(url_for("admin_panel"))
+
+
+@app.route("/admin/remove-agent", methods=["POST"])
+@admin_login_required
+def admin_remove_agent():
+    agent_email = request.form.get("agent_email", "").strip().lower()
+    if not agent_email:
+        flash("Agent email is required.", "error")
+        return redirect(url_for("admin_panel"))
+
+    conn = get_db()
+    conn.execute("DELETE FROM agents WHERE email = ?", (agent_email,))
+    conn.commit()
+    conn.close()
+
+    flash(f"Agent email '{agent_email}' removed.", "success")
+    return redirect(url_for("admin_panel"))
+
+
+@app.route("/admin/user/<decision>", methods=["POST"])
+@admin_login_required
+def decide_user_account(decision):
+    email = request.form.get("email", "").strip().lower()
+    user = get_user_dict(email)
+    if not user:
+        flash("User not found.", "error")
+        return redirect(url_for("admin_panel"))
+
+    if decision == "approve":
+        conn = get_db()
+        conn.execute("UPDATE users SET status = 'ACTIVE' WHERE email = ?", (email,))
+        conn.commit()
+        conn.close()
+        user["status"] = "ACTIVE"
+        send_agent_mail(user)
+        flash(f"User {email} approved (ACTIVE).", "success")
+    elif decision == "reject":
+        conn = get_db()
+        conn.execute("UPDATE users SET status = 'REJECTED' WHERE email = ?", (email,))
+        conn.commit()
+        conn.close()
+        flash(f"User {email} rejected.", "success")
+
+    return redirect(url_for("admin_panel"))
 
 
 @app.route("/admin/toggle-agent-mail-account", methods=["POST"])
 @admin_login_required
 def toggle_agent_mail_account():
-    global AGENT_MAIL_AUTO_ACCOUNT
-    AGENT_MAIL_AUTO_ACCOUNT = not AGENT_MAIL_AUTO_ACCOUNT
-    state = "ON (Auto Account Creation Active)" if AGENT_MAIL_AUTO_ACCOUNT else "OFF (Account Creation Disabled)"
-    flash(f"Agent Mail Auto Account is now {state}.", "success")
+    new_state = not get_auto_account_flag()
+    set_auto_account_flag(new_state)
+    state_text = "ON (Auto Account Creation Active)" if new_state else "OFF (Pending Approval Required)"
+    flash(f"Agent Mail Auto Account is now {state_text}.", "success")
     return redirect(url_for("admin_panel"))
 
 
@@ -356,7 +794,10 @@ def set_country_rate():
         return redirect(url_for("admin_panel"))
 
     if country and rate >= 0:
-        COUNTRY_RATES[country] = rate
+        conn = get_db()
+        conn.execute("INSERT OR REPLACE INTO country_rates (country, rate) VALUES (?, ?)", (country, rate))
+        conn.commit()
+        conn.close()
         flash(f"Country rate updated for {country}.", "success")
     return redirect(url_for("admin_panel"))
 
@@ -372,7 +813,10 @@ def set_service_rate():
         return redirect(url_for("admin_panel"))
 
     if service and rate >= 0:
-        SERVICE_RATES[service] = rate
+        conn = get_db()
+        conn.execute("INSERT OR REPLACE INTO service_rates (service, rate) VALUES (?, ?)", (service, rate))
+        conn.commit()
+        conn.close()
         flash(f"Service rate updated for {service}.", "success")
     return redirect(url_for("admin_panel"))
 
@@ -380,21 +824,29 @@ def set_service_rate():
 @app.route("/admin/withdraw/<req_id>/<decision>", methods=["POST"])
 @admin_login_required
 def decide_withdraw(req_id, decision):
-    for w in WITHDRAWALS:
-        if w["id"] == req_id and w["status"] == "PENDING":
-            user = USERS.get(w["user_email"])
-            if decision == "approve":
-                w["status"] = "APPROVED"
-                w["decided_at"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-                flash(f"Withdraw {req_id} approved.", "success")
-            elif decision == "reject":
-                w["status"] = "REJECTED"
-                w["reason"] = request.form.get("reason", "").strip() or "Rejected by Admin."
-                w["decided_at"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-                if user:
-                    user["balance"] = round(user["balance"] + w["amount"], 4)
-                flash(f"Withdraw {req_id} rejected and balance refunded.", "success")
-            break
+    conn = get_db()
+    w = conn.execute("SELECT * FROM withdrawals WHERE id = ?", (req_id,)).fetchone()
+    if w and w["status"] == "PENDING":
+        decided_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        if decision == "approve":
+            conn.execute(
+                "UPDATE withdrawals SET status = 'APPROVED', decided_at = ? WHERE id = ?",
+                (decided_at, req_id)
+            )
+            flash(f"Withdraw {req_id} approved.", "success")
+        elif decision == "reject":
+            reason = request.form.get("reason", "").strip() or "Rejected by Admin."
+            conn.execute(
+                "UPDATE withdrawals SET status = 'REJECTED', reason = ?, decided_at = ? WHERE id = ?",
+                (reason, decided_at, req_id)
+            )
+            conn.execute(
+                "UPDATE users SET balance = ROUND(balance + ?, 4) WHERE email = ?",
+                (float(w["amount"]), w["user_email"])
+            )
+            flash(f"Withdraw {req_id} rejected and balance refunded.", "success")
+        conn.commit()
+    conn.close()
     return redirect(url_for("admin_panel"))
 
 
@@ -404,26 +856,35 @@ def decide_withdraw(req_id, decision):
 @user_login_required
 def manage_user_api_key(user, action):
     now_str = datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
+    conn = get_db()
     if action == "regenerate":
-        user["api_key"] = f"M{secrets.token_hex(6).upper()}"
-        user["api_key_created"] = now_str
+        new_key = f"M{secrets.token_hex(6).upper()}"
+        conn.execute(
+            "UPDATE users SET api_key = ?, api_key_created = ? WHERE email = ?",
+            (new_key, now_str, user["email"])
+        )
+        conn.commit()
+        conn.close()
         return jsonify({
             "ok": True,
-            "api_key": user["api_key"],
-            "created_at": user["api_key_created"],
+            "api_key": new_key,
+            "created_at": now_str,
             "message": "New API key generated successfully."
         })
     elif action == "revoke":
-        user["api_key"] = None
+        conn.execute("UPDATE users SET api_key = NULL WHERE email = ?", (user["email"],))
+        conn.commit()
+        conn.close()
         return jsonify({
             "ok": True,
             "api_key": None,
             "message": "API key has been revoked."
         })
+    conn.close()
     return jsonify({"ok": False, "message": "Invalid action."}), 400
 
 
-# ---------------- BRIDGE & OTP EARNING LOGIC (সবগুলোই লগইন ছাড়া ব্লক) ----------------
+# ---------------- BRIDGE & OTP EARNING LOGIC ----------------
 
 @app.route("/api/bridge/console")
 @user_login_required
@@ -472,22 +933,39 @@ def bridge_getnum(user):
     data = res_json["data"]
     country = data.get("country", "Default")
     now = time.time()
+    num_id = secrets.token_hex(6)
+    range_str = raw_range or f"{clean_rid}XXX"
+    rate_val = calculate_rate(country, "")
+
     entry = {
-        "id": secrets.token_hex(6),
-        "range": raw_range or f"{clean_rid}XXX",
+        "id": num_id,
+        "range": range_str,
         "full_number": data.get("full_number", ""),
         "national_number": data.get("national_number", ""),
         "no_plus_number": data.get("no_plus_number", ""),
         "country": country,
         "operator": data.get("operator", ""),
-        "country_rate": calculate_rate(country, ""),
+        "country_rate": rate_val,
         "created_at": now,
         "expires_at": now + NUMBER_TTL_SECONDS,
         "otp_message": None,
         "earned_amount": 0.0,
     }
 
-    USER_NUMBERS.setdefault(user["email"], []).insert(0, entry)
+    conn = get_db()
+    conn.execute("""
+        INSERT INTO user_numbers (
+            id, user_email, range_val, full_number, national_number, no_plus_number,
+            country, operator, country_rate, created_ts, expires_ts, otp_message, earned_amount
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        num_id, user["email"], range_str, entry["full_number"], entry["national_number"],
+        entry["no_plus_number"], country, entry["operator"], rate_val,
+        entry["created_at"], entry["expires_at"], None, 0.0
+    ))
+    conn.commit()
+    conn.close()
+
     return jsonify({"ok": True, "item": entry})
 
 
@@ -495,107 +973,199 @@ def bridge_getnum(user):
 @user_login_required
 def bridge_my_numbers(user):
     now = time.time()
-    items = USER_NUMBERS.get(user["email"], [])
-    api_token = get_api_token()
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM user_numbers WHERE user_email = ? ORDER BY created_ts DESC",
+        (user["email"],)
+    ).fetchall()
+    items = [dict(r) for r in rows]
 
-    active_items = [it for it in items if it["expires_at"] > now and not it["otp_message"]]
+    api_token = get_api_token()
+    active_items = [it for it in items if it["expires_ts"] > now and not it["otp_message"]]
+
     if active_items and api_token:
         try:
             r = requests.get(SUCCESS_OTP_API_URL, headers=upstream_headers(api_token), timeout=10)
             otps = (r.json().get("data") or {}).get("otps") or []
             for it in active_items:
-                num_clean = it["no_plus_number"]
+                num_clean = str(it["no_plus_number"] or "")
+                if not num_clean:
+                    continue
                 for otp in otps:
                     otp_num = str(otp.get("number", ""))
                     if otp_num.endswith(num_clean) or num_clean.endswith(otp_num):
                         msg_text = otp.get("message", "")
                         service_sid = detect_service_from_message(msg_text)
                         rate_used = calculate_rate(it["country"], service_sid)
+                        now_utc = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
                         it["otp_message"] = msg_text
                         it["earned_amount"] = rate_used
 
-                        user["balance"] = round(user["balance"] + rate_used, 4)
-                        user["lifetime_earning"] = round(user["lifetime_earning"] + rate_used, 4)
-                        user["otp_count"] += 1
-
-                        OTP_EARNING_LOGS.insert(0, {
-                            "time": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
-                            "user_email": user["email"],
-                            "number": it["full_number"],
-                            "country": it["country"],
-                            "service": service_sid,
-                            "rate": rate_used,
-                            "message": msg_text,
-                        })
+                        conn.execute(
+                            "UPDATE user_numbers SET otp_message = ?, earned_amount = ? WHERE id = ?",
+                            (msg_text, rate_used, it["id"])
+                        )
+                        conn.execute(
+                            """UPDATE users
+                               SET balance = ROUND(balance + ?, 4),
+                                   lifetime_earning = ROUND(lifetime_earning + ?, 4),
+                                   otp_count = otp_count + 1
+                               WHERE email = ?""",
+                            (rate_used, rate_used, user["email"])
+                        )
+                        conn.execute(
+                            """INSERT INTO otp_logs (
+                                created_at, created_ts, user_email, agent_email,
+                                number_val, country, service, rate, message
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            (
+                                now_utc, now, user["email"], user["agent_email"],
+                                it["full_number"], it["country"], service_sid, rate_used, msg_text
+                            )
+                        )
+                        conn.commit()
                         break
         except Exception:
             pass
 
+    fresh_user = get_user_dict(user["email"])
+    current_balance = float(fresh_user["balance"]) if fresh_user else float(user["balance"])
+    conn.close()
+
     formatted = []
     for it in items:
-        remaining = max(0, int(it["expires_at"] - now))
+        remaining = max(0, int(it["expires_ts"] - now))
         formatted.append({
-            **it,
+            "id": it["id"],
+            "range": it["range_val"],
+            "full_number": it["full_number"],
+            "national_number": it["national_number"],
+            "no_plus_number": it["no_plus_number"],
+            "country": it["country"],
+            "operator": it["operator"],
+            "country_rate": it["country_rate"],
+            "created_at": it["created_ts"],
+            "expires_at": it["expires_ts"],
+            "otp_message": it["otp_message"],
+            "earned_amount": it["earned_amount"],
             "remaining_seconds": remaining,
             "expired": remaining == 0,
-            "balance": user["balance"],
+            "balance": current_balance,
         })
 
-    return jsonify({"ok": True, "numbers": formatted, "balance": user["balance"]})
+    return jsonify({"ok": True, "numbers": formatted, "balance": current_balance})
 
 
-# ---------------- USER PAYMENT (bKash / Nagad Withdraw) ----------------
+# ---------------- USER PAYMENT (Saved Addresses & Withdraw) ----------------
+
+@app.route("/payment/save-address", methods=["POST"])
+@user_login_required
+def save_address(user):
+    gateway = request.form.get("gateway", "").strip()
+    label = request.form.get("label", "").strip()
+    wallet_address = request.form.get("wallet_address", "").strip()
+
+    if gateway not in ("USDT SOL Network", "bKash", "Nagad"):
+        flash("Please select a valid gateway.", "error")
+        return redirect(url_for("payment_page"))
+    if not label or not wallet_address:
+        flash("Label and wallet/account number are required.", "error")
+        return redirect(url_for("payment_page"))
+
+    conn = get_db()
+    conn.execute("""
+        INSERT INTO payment_addresses (id, user_email, gateway, label, address, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (
+        secrets.token_hex(5).upper(),
+        user["email"],
+        gateway,
+        label,
+        wallet_address,
+        datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+    ))
+    conn.commit()
+    conn.close()
+
+    flash("Payment address saved successfully!", "success")
+    return redirect(url_for("payment_page"))
+
 
 @app.route("/payment", methods=["GET", "POST"])
 @user_login_required
 def payment_page(user):
+    conn = get_db()
+
     if request.method == "POST":
-        method = request.form.get("method", "").strip()  # bKash / Nagad
-        wallet_number = request.form.get("wallet_number", "").strip()
+        address_id = request.form.get("address_id", "").strip()
         try:
             amount = float(request.form.get("amount", "0"))
         except ValueError:
+            conn.close()
             flash("Invalid withdraw amount.", "error")
             return redirect(url_for("payment_page"))
 
-        if method not in ("bKash", "Nagad"):
-            flash("Please select bKash or Nagad.", "error")
-            return redirect(url_for("payment_page"))
-        if not wallet_number:
-            flash("Please enter your bKash/Nagad number.", "error")
-            return redirect(url_for("payment_page"))
-        if amount <= 0 or amount > user["balance"]:
-            flash("Insufficient balance or invalid amount.", "error")
+        addr_row = conn.execute(
+            "SELECT * FROM payment_addresses WHERE id = ? AND user_email = ?",
+            (address_id, user["email"])
+        ).fetchone()
+
+        if not addr_row:
+            conn.close()
+            flash("Please select a valid saved payment address.", "error")
             return redirect(url_for("payment_page"))
 
-        user["balance"] = round(user["balance"] - amount, 4)
-        WITHDRAWALS.insert(0, {
-            "id": secrets.token_hex(5).upper(),
-            "user_email": user["email"],
-            "user_name": user["name"],
-            "method": method,
-            "wallet_number": wallet_number,
-            "amount": amount,
-            "status": "PENDING",
-            "reason": "",
-            "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
-            "decided_at": "",
-        })
+        if amount < 0.50 or amount > float(user["balance"]):
+            conn.close()
+            flash("Minimum withdraw is $0.50 and must not exceed your balance.", "error")
+            return redirect(url_for("payment_page"))
+
+        conn.execute(
+            "UPDATE users SET balance = ROUND(balance - ?, 4) WHERE email = ?",
+            (amount, user["email"])
+        )
+        conn.execute("""
+            INSERT INTO withdrawals (
+                id, user_email, user_name, method, wallet_number, amount,
+                status, reason, created_at, decided_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'PENDING', '', ?, '')
+        """, (
+            secrets.token_hex(5).upper(),
+            user["email"],
+            user["name"],
+            addr_row["gateway"],
+            f"{addr_row['label']} ({addr_row['address']})",
+            amount,
+            datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+        ))
+        conn.commit()
+        conn.close()
+
         flash("Withdraw request submitted! Waiting for Admin approval.", "success")
         return redirect(url_for("payment_page"))
 
-    user_withdraws = [w for w in WITHDRAWALS if w["user_email"] == user["email"]]
+    user_addresses = [dict(r) for r in conn.execute(
+        "SELECT * FROM payment_addresses WHERE user_email = ? ORDER BY rowid DESC", (user["email"],)
+    ).fetchall()]
+
+    user_withdraws = [dict(r) for r in conn.execute(
+        "SELECT * FROM withdrawals WHERE user_email = ? ORDER BY rowid DESC", (user["email"],)
+    ).fetchall()]
+    conn.close()
+
+    fresh_user = get_user_dict(user["email"])
     return render_template(
         "payment.html",
-        user=user,
+        user=fresh_user,
         sidebar_items=SIDEBAR_ITEMS,
         active="payment",
+        addresses=user_addresses,
         withdrawals=user_withdraws,
     )
 
 
-# ---------------- PANEL PAGES (সবগুলোতেই অ্যাকাউন্ট লগইন বাধ্যতামূলক) ----------------
+# ---------------- PANEL PAGES ----------------
 
 @app.route("/dashboard")
 @user_login_required
@@ -632,6 +1202,8 @@ def logout():
     session.clear()
     return redirect(url_for("login"))
 
+
+init_db()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
