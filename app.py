@@ -32,7 +32,7 @@ PANELS = {
     "1": {
         "key": "1",
         "slug": "panel1",
-        "name": os.environ.get("PANEL1_BRAND_NAME", "SR 1").strip() or "SR 1",
+        "name": "1 server",
         "setting_key": "voltx_panel_active",
         "base_url": os.environ.get(
             "PANEL1_BASE_URL",
@@ -46,7 +46,7 @@ PANELS = {
     "2": {
         "key": "2",
         "slug": "panel2",
-        "name": os.environ.get("PANEL2_BRAND_NAME", "YEHUB").strip() or "YEHUB",
+        "name": "2 server",
         "setting_key": "panel_2_active",
         "base_url": os.environ.get(
             "PANEL2_BASE_URL",
@@ -60,7 +60,7 @@ PANELS = {
     "3": {
         "key": "3",
         "slug": "panel3",
-        "name": os.environ.get("PANEL3_BRAND_NAME", "SL Virtual").strip() or "SL Virtual",
+        "name": "3 server",
         "setting_key": "panel_3_active",
         "base_url": os.environ.get(
             "PANEL3_BASE_URL",
@@ -72,6 +72,7 @@ PANELS = {
         "style": "slvirtual",
     },
 }
+
 
 PANEL_BRAND_NAME = PANELS["1"]["name"]
 PANEL_OFF_MSG = f"{PANEL_BRAND_NAME} Panel is currently turned OFF by Admin."
@@ -1949,53 +1950,96 @@ def _normalize_liveaccess_for_panel(p: dict, raw_json: dict):
     return _filter_liveaccess_5h({"meta": {"code": 200, "status": "success"}, "data": {"services": services}})
 
 
+def _fetch_single_panel_console_hits(p: dict) -> list:
+    token = get_api_token(p["key"])
+    if not token:
+        return []
+
+    hits = []
+    if p["style"] == "sr1":
+        r = requests.get(f"{p['base_url']}/console", headers=upstream_headers(token, p["key"]), timeout=10)
+        res = r.json()
+        raw_hits = ((res or {}).get("data") or {}).get("hits") or []
+        for h in raw_hits:
+            if isinstance(h, dict):
+                item = dict(h)
+                item["panel"] = p["key"]
+                item["panel_name"] = p["name"]
+                hits.append(item)
+    elif p["style"] == "yehub":
+        r = requests.get(f"{p['base_url']}/console_data", headers=upstream_headers(token, p["key"]), timeout=10)
+        raw = r.json()
+        for row in (raw.get("table") or []):
+            if isinstance(row, list) and len(row) >= 4:
+                hits.append({
+                    "range": row[0],
+                    "country": row[1],
+                    "message": row[2],
+                    "service": row[3],
+                    "ts": row[4] if len(row) > 4 else None,
+                    "panel": p["key"],
+                    "panel_name": p["name"],
+                })
+    else:  # slvirtual
+        r = requests.get(f"{p['base_url']}/live-console?limit=50", headers=upstream_headers(token, p["key"]), timeout=10)
+        raw = r.json()
+        for item in (raw.get("data") or []):
+            hits.append({
+                "number": item.get("maskedNumber", ""),
+                "range": item.get("rangePrefix") or item.get("tag", ""),
+                "country": item.get("country", ""),
+                "service": item.get("service", ""),
+                "message": item.get("rawSnippet") or item.get("otpCode", ""),
+                "panel": p["key"],
+                "panel_name": p["name"],
+            })
+    return hits
+
+
 @app.route("/api/bridge/console")
 @user_login_required
 def bridge_console(user):
-    p = resolve_panel()
-    if not get_panel_active_flag(p["key"]):
-        return panel_off_json(p["key"], 503)
-    token = get_api_token(p["key"])
-    try:
-        if p["style"] == "sr1":
-            r = requests.get(f"{p['base_url']}/console", headers=upstream_headers(token, p["key"]), timeout=10)
-            res = r.json()
-        elif p["style"] == "yehub":
-            r = requests.get(f"{p['base_url']}/console_data", headers=upstream_headers(token, p["key"]), timeout=10)
-            raw = r.json()
-            hits = []
-            for row in (raw.get("table") or []):
-                if isinstance(row, list) and len(row) >= 4:
-                    hits.append({
-                        "range": row[0],
-                        "country": row[1],
-                        "message": row[2],
-                        "service": row[3],
-                        "ts": row[4] if len(row) > 4 else None,
-                    })
-            res = {"meta": {"code": 200, "status": "success"}, "data": {"hits": hits}}
-        else:  # slvirtual
-            r = requests.get(f"{p['base_url']}/live-console?limit=50", headers=upstream_headers(token, p["key"]), timeout=10)
-            raw = r.json()
-            hits = []
-            for item in (raw.get("data") or []):
-                hits.append({
-                    "number": item.get("maskedNumber", ""),
-                    "range": item.get("rangePrefix") or item.get("tag", ""),
-                    "country": item.get("country", ""),
-                    "service": item.get("service", ""),
-                    "message": item.get("rawSnippet") or item.get("otpCode", ""),
-                })
-            res = {"meta": {"code": 200, "status": "success"}, "data": {"hits": hits}}
+    explicit_panel = (request.args.get("panel") or request.headers.get("X-Panel") or "").strip()
+    if explicit_panel:
+        p = resolve_panel(explicit_panel)
+        if not get_panel_active_flag(p["key"]):
+            return panel_off_json(p["key"], 503)
+        try:
+            hits = _fetch_single_panel_console_hits(p)
+            return jsonify({
+                "meta": {"code": 200, "status": "success"},
+                "panel": p["key"],
+                "panel_name": p["name"],
+                "voltx_active": get_panel_active_flag("1"),
+                "panel_active": True,
+                "data": {"hits": hits},
+            })
+        except Exception as e:
+            return jsonify({"meta": {"code": 500, "status": "error"}, "panel": p["key"], "message": str(e), "data": {"hits": []}})
 
-        if isinstance(res, dict):
-            res["panel"] = p["key"]
-            res["voltx_active"] = get_panel_active_flag("1")
-            res["panel_active"] = True
-            res["panel_name"] = p["name"]
-        return jsonify(res)
-    except Exception as e:
-        return jsonify({"meta": {"code": 500, "status": "error"}, "panel": p["key"], "message": str(e), "data": {"hits": []}})
+    if not get_panel_active_flag("1"):
+        return panel_off_json("1", 503)
+
+    combined_hits = []
+    errors = []
+    for pk in ["1", "2", "3"]:
+        p = PANELS[pk]
+        if not get_panel_active_flag(pk):
+            continue
+        try:
+            combined_hits.extend(_fetch_single_panel_console_hits(p))
+        except Exception as e:
+            errors.append(f"{p['name']}: {e}")
+
+    return jsonify({
+        "meta": {"code": 200, "status": "success"},
+        "panel": "all",
+        "panel_name": "All Servers",
+        "voltx_active": get_panel_active_flag("1"),
+        "panel_active": True,
+        "errors": errors,
+        "data": {"hits": combined_hits},
+    })
 
 
 @app.route("/api/bridge/liveaccess")
@@ -2051,6 +2095,7 @@ def bridge_my_numbers(user):
         "panel_active": get_panel_active_flag(p["key"] if p else "1"),
         "panel_name": p["name"] if p else PANEL_BRAND_NAME,
     })
+
 
 
 # ---------------- PUBLIC / USER API v1 ENDPOINTS ----------------
