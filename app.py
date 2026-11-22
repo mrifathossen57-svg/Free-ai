@@ -4,6 +4,7 @@ import time
 import smtplib
 import secrets
 import sqlite3
+import threading
 import requests
 from email.mime.text import MIMEText
 from functools import wraps
@@ -27,7 +28,25 @@ app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 
 DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel.db"))
 
-# ---------------- MULTI-PANEL CONFIG (BASE URLs IN app.py, KEYS IN ENV) ----------------
+# ---------------- MASTER API & MULTI-PANEL CONFIG ----------------
+MASTER_API_CONFIG = {
+    "mode": "multi_panel_fallback",
+    "panel_order": ["1", "2", "3", "4", "5"],
+    "endpoints": {
+        "master_getnum": "/api/v1/master/getnum",
+        "get_number": "/getnum",
+        "live_access": "/liveaccess",
+        "success_otp": "/success-otp",
+        "console": "/console",
+    },
+    "mapping": {
+        "list_key": "data.hits",
+        "range": "range",
+        "service": "sid",
+        "time": "time",
+    },
+}
+
 PANELS = {
     "1": {
         "key": "1",
@@ -41,6 +60,20 @@ PANELS = {
         "api_key_env": "PANEL1_API_KEY",
         "fallback_key_env": "UPSTREAM_API_KEY",
         "auth_header": "mauthapi",
+        "headers": {"mauthapi": os.environ.get("PANEL1_API_KEY", os.environ.get("UPSTREAM_API_KEY", "")).strip()},
+        "endpoint": "/console",
+        "number_endpoint": "/getnum",
+        "mapping": {
+            "list_key": "data.hits",
+            "range": "range",
+            "service": "sid",
+            "time": "time",
+        },
+        "extra_endpoints": {
+            "get_number": "/getnum",
+            "live_access": "/liveaccess",
+            "success_otp": "/success-otp",
+        },
         "style": "sr1",
     },
     "2": {
@@ -55,6 +88,20 @@ PANELS = {
         "api_key_env": "PANEL2_API_KEY",
         "fallback_key_env": "",
         "auth_header": "authkey",
+        "headers": {"authkey": os.environ.get("PANEL2_API_KEY", "").strip()},
+        "endpoint": "/console_data",
+        "number_endpoint": "/allocate_number",
+        "mapping": {
+            "list_key": "table",
+            "range": "range",
+            "service": "service",
+            "time": "ts",
+        },
+        "extra_endpoints": {
+            "get_number": "/allocate_number",
+            "live_access": "/live_access_data",
+            "success_otp": "/user_numbers",
+        },
         "style": "yehub",
     },
     "3": {
@@ -69,12 +116,26 @@ PANELS = {
         "api_key_env": "PANEL3_API_KEY",
         "fallback_key_env": "",
         "auth_header": "x-api-key",
+        "headers": {"x-api-key": os.environ.get("PANEL3_API_KEY", "").strip()},
+        "endpoint": "/live-console",
+        "number_endpoint": "/rent",
+        "mapping": {
+            "list_key": "data",
+            "range": "rangePrefix",
+            "service": "service",
+            "time": "time",
+        },
+        "extra_endpoints": {
+            "get_number": "/rent",
+            "live_access": "/available-countries",
+            "success_otp": "/otp-monitor",
+        },
         "style": "slvirtual",
     },
     "4": {
         "key": "4",
         "slug": "panel4",
-        "name": "ZENEX",
+        "name": "4 server",
         "command": "/ZENEX",
         "setting_key": "panel_4_active",
         "base_url": os.environ.get(
@@ -85,20 +146,27 @@ PANELS = {
         "fallback_key_env": "",
         "default_api_key": "ZNX_4MXS5N5JVJTLLDJY7GM87EKL",
         "auth_header": "mapikey",
+        "headers": {"mapikey": os.environ.get("PANEL4_API_KEY", "ZNX_4MXS5N5JVJTLLDJY7GM87EKL").strip()},
         "endpoint": "/v1/active-ranges",
-        "number_endpoint": "",
+        "number_endpoint": "/v1/getnum",
+        "otp_endpoint": "/v1/numsuccess/info",
         "mapping": {
             "list_key": "data.active_ranges",
             "range": "range",
             "service": "service",
             "time": "created_at",
         },
+        "extra_endpoints": {
+            "get_number": "/v1/getnum",
+            "live_access": "/v1/active-ranges",
+            "success_otp": "/v1/numsuccess/info",
+        },
         "style": "zenex",
     },
     "5": {
         "key": "5",
         "slug": "panel5",
-        "name": "ZebraSMS",
+        "name": "5 server",
         "setting_key": "panel_5_active",
         "base_url": os.environ.get(
             "PANEL5_BASE_URL",
@@ -108,6 +176,20 @@ PANELS = {
         "fallback_key_env": "",
         "default_api_key": "",
         "auth_header": "MAuth",
+        "headers": {"MAuth": os.environ.get("PANEL5_API_KEY", "").strip()},
+        "endpoint": "/publicapi/getupdate",
+        "number_endpoint": "/publicapi/getnum",
+        "mapping": {
+            "list_key": "data.rows",
+            "range": "range",
+            "service": "sender",
+            "time": "at_ms",
+        },
+        "extra_endpoints": {
+            "get_number": "/publicapi/getnum",
+            "live_access": "/publicapi/liveaccess",
+            "success_otp": "/publicapi/getupdate",
+        },
         "style": "zebrasms",
     },
 }
@@ -809,6 +891,18 @@ def _extract_nested(obj: dict, path_str: str):
         else:
             return None
     return cur
+
+
+def _format_ts_or_ms(val) -> str:
+    if val is None or val == "":
+        return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    try:
+        fval = float(val)
+        if fval > 1e12:
+            fval /= 1000.0
+        return datetime.utcfromtimestamp(fval).strftime("%Y-%m-%d %H:%M:%S UTC")
+    except (ValueError, TypeError, OSError):
+        return str(val)
 
 
 def calculate_rate(country: str, service_sid: str = "", agent_email: str = "") -> float:
@@ -1659,9 +1753,9 @@ def manage_user_api_key(user, action):
     return jsonify({"ok": False, "message": "Invalid action."}), 400
 
 
-# ---------------- SHARED NUMBER & OTP LOGIC (MULTI-PANEL) ----------------
+# ---------------- SHARED NUMBER & OTP LOGIC (MULTI-PANEL + MASTER FALLBACK) ----------------
 
-def _create_number_for_user(user_dict: dict, raw_range: str, panel_key: str = "1"):
+def _create_number_for_single_panel(user_dict: dict, raw_range: str, panel_key: str = "1"):
     p = resolve_panel(panel_key)
     if not get_panel_active_flag(p["key"]):
         return {"ok": False, "message": f"{p['name']} Panel is currently turned OFF by Admin."}
@@ -1671,15 +1765,16 @@ def _create_number_for_user(user_dict: dict, raw_range: str, panel_key: str = "1
         return {"ok": False, "message": f"{p['name']} API key is not configured in environment ({p['api_key_env']})."}
 
     clean_rid = str(raw_range or "").upper().replace("X", "").replace("+", "").strip()
-    if not clean_rid and p["style"] not in ("slvirtual", "zebrasms"):
+    if not clean_rid and p["style"] not in ("slvirtual", "zebrasms", "zenex"):
         return {"ok": False, "message": "Please enter a valid range."}
 
     expires_ts = None
 
     try:
         if p["style"] == "sr1":
+            num_ep = (p.get("extra_endpoints") or {}).get("get_number") or "/getnum"
             r = requests.post(
-                f"{p['base_url']}/getnum",
+                f"{p['base_url']}{num_ep}",
                 headers=upstream_headers(api_token, p["key"]),
                 json={"rid": clean_rid},
                 timeout=12,
@@ -1695,8 +1790,9 @@ def _create_number_for_user(user_dict: dict, raw_range: str, panel_key: str = "1
             operator = data.get("operator", "")
 
         elif p["style"] == "yehub":
+            num_ep = (p.get("extra_endpoints") or {}).get("get_number") or p.get("number_endpoint") or "/allocate_number"
             r = requests.post(
-                f"{p['base_url']}/allocate_number",
+                f"{p['base_url']}{num_ep}",
                 headers=upstream_headers(api_token, p["key"]),
                 json={"range_id": str(raw_range or clean_rid).strip()},
                 timeout=12,
@@ -1712,12 +1808,13 @@ def _create_number_for_user(user_dict: dict, raw_range: str, panel_key: str = "1
             operator = data.get("operator", "")
 
         elif p["style"] == "slvirtual":
+            num_ep = (p.get("extra_endpoints") or {}).get("get_number") or p.get("number_endpoint") or "/rent"
             payload_body = {}
             if clean_rid:
                 payload_body["rangePrefix"] = clean_rid
             payload_body["service"] = "ANY"
             r = requests.post(
-                f"{p['base_url']}/rent",
+                f"{p['base_url']}{num_ep}",
                 headers=upstream_headers(api_token, p["key"]),
                 json=payload_body,
                 timeout=12,
@@ -1733,12 +1830,13 @@ def _create_number_for_user(user_dict: dict, raw_range: str, panel_key: str = "1
             operator = data.get("tag", "")
 
         elif p["style"] == "zebrasms":
+            num_ep = (p.get("extra_endpoints") or {}).get("get_number") or p.get("number_endpoint") or "/publicapi/getnum"
             req_range = str(raw_range or "").strip()
             if not req_range and clean_rid:
                 req_range = f"{clean_rid}XXX"
             payload_body = {"range": req_range} if req_range else {}
             r = requests.post(
-                f"{p['base_url']}/publicapi/getnum",
+                f"{p['base_url']}{num_ep}",
                 headers=upstream_headers(api_token, p["key"]),
                 json=payload_body,
                 timeout=12,
@@ -1768,8 +1866,40 @@ def _create_number_for_user(user_dict: dict, raw_range: str, panel_key: str = "1
                 except (ValueError, TypeError):
                     pass
 
-        else:  # zenex
-            num_ep = (p.get("number_endpoint") or "").strip()
+        elif p["style"] == "zenex":
+            num_ep = (p.get("extra_endpoints") or {}).get("get_number") or p.get("number_endpoint") or "/v1/getnum"
+            req_range = str(raw_range or clean_rid).strip()
+            r = requests.post(
+                f"{p['base_url']}{num_ep}",
+                headers=upstream_headers(api_token, p["key"]),
+                json={
+                    "range": req_range,
+                    "is_national": False,
+                    "remove_plus": False,
+                },
+                timeout=12,
+            )
+            res_json = r.json()
+            meta = res_json.get("meta") if isinstance(res_json.get("meta"), dict) else {}
+            meta_code = meta.get("code")
+            meta_status = str(meta.get("status") or "").lower()
+            data = res_json.get("data") if isinstance(res_json.get("data"), dict) else {}
+
+            if (meta_code is not None and meta_code not in (0, 200)) or (meta_status and meta_status != "success" and not data):
+                return {"ok": False, "message": res_json.get("message") or "Out of stock or invalid range."}
+
+            full_num = str(data.get("full_number") or data.get("number") or data.get("copy") or "").strip()
+            if not full_num:
+                return {"ok": False, "message": res_json.get("message") or "No number returned by Zenex."}
+            if not full_num.startswith("+"):
+                full_num = f"+{full_num}"
+            no_plus = full_num.lstrip("+")
+            nat_num = str(data.get("national_number") or no_plus).strip()
+            country = str(data.get("country") or "Default")
+            operator = str(data.get("operator") or "")
+
+        else:
+            num_ep = (p.get("extra_endpoints") or {}).get("get_number") or (p.get("number_endpoint") or "").strip()
             if not num_ep:
                 return {"ok": False, "message": f"{p['name']} does not have a number allocation endpoint configured."}
             r = requests.post(
@@ -1833,6 +1963,27 @@ def _create_number_for_user(user_dict: dict, raw_range: str, panel_key: str = "1
     return {"ok": True, "item": entry}
 
 
+def _create_number_for_user(user_dict: dict, raw_range: str, panel_key: str = "master"):
+    mode = str(panel_key or "master").strip().lower()
+    if mode in ("", "master", "auto", "all"):
+        tried_errors = []
+        for pk in MASTER_API_CONFIG["panel_order"]:
+            p = PANELS.get(pk)
+            if not p or not get_panel_active_flag(pk) or not get_api_token(pk):
+                continue
+            res = _create_number_for_single_panel(user_dict, raw_range, pk)
+            if res.get("ok"):
+                res["matched_panel"] = pk
+                res["matched_panel_name"] = p["name"]
+                return res
+            tried_errors.append(f"{p['name']}: {res.get('message')}")
+        return {
+            "ok": False,
+            "message": " | ".join(tried_errors) if tried_errors else "No active panel with available number found for this range."
+        }
+    return _create_number_for_single_panel(user_dict, raw_range, panel_key)
+
+
 def _fetch_incoming_otps_for_panel(panel_key: str) -> list:
     p = resolve_panel(panel_key)
     if not get_panel_active_flag(p["key"]):
@@ -1844,7 +1995,8 @@ def _fetch_incoming_otps_for_panel(panel_key: str) -> list:
     otps = []
     try:
         if p["style"] == "sr1":
-            r = requests.get(f"{p['base_url']}/success-otp", headers=upstream_headers(api_token, p["key"]), timeout=10)
+            otp_ep = (p.get("extra_endpoints") or {}).get("success_otp") or "/success-otp"
+            r = requests.get(f"{p['base_url']}{otp_ep}", headers=upstream_headers(api_token, p["key"]), timeout=10)
             raw_list = (r.json().get("data") or {}).get("otps") or []
             for item in raw_list:
                 otps.append({
@@ -1852,7 +2004,8 @@ def _fetch_incoming_otps_for_panel(panel_key: str) -> list:
                     "message": str(item.get("message") or ""),
                 })
         elif p["style"] == "yehub":
-            r = requests.get(f"{p['base_url']}/user_numbers", headers=upstream_headers(api_token, p["key"]), timeout=10)
+            otp_ep = (p.get("extra_endpoints") or {}).get("success_otp") or "/user_numbers"
+            r = requests.get(f"{p['base_url']}{otp_ep}", headers=upstream_headers(api_token, p["key"]), timeout=10)
             raw_list = r.json().get("logs") or []
             for item in raw_list:
                 otps.append({
@@ -1860,7 +2013,8 @@ def _fetch_incoming_otps_for_panel(panel_key: str) -> list:
                     "message": str(item.get("full_message") or item.get("message") or ""),
                 })
         elif p["style"] == "slvirtual":
-            r = requests.get(f"{p['base_url']}/otp-monitor?limit=100", headers=upstream_headers(api_token, p["key"]), timeout=10)
+            otp_ep = (p.get("extra_endpoints") or {}).get("success_otp") or "/otp-monitor"
+            r = requests.get(f"{p['base_url']}{otp_ep}?limit=100", headers=upstream_headers(api_token, p["key"]), timeout=10)
             raw_list = r.json().get("data") or []
             for item in raw_list:
                 otps.append({
@@ -1868,7 +2022,8 @@ def _fetch_incoming_otps_for_panel(panel_key: str) -> list:
                     "message": str(item.get("fullSms") or item.get("message") or ""),
                 })
         elif p["style"] == "zebrasms":
-            r = requests.get(f"{p['base_url']}/publicapi/getupdate", headers=upstream_headers(api_token, p["key"]), timeout=10)
+            otp_ep = (p.get("extra_endpoints") or {}).get("success_otp") or "/publicapi/getupdate"
+            r = requests.get(f"{p['base_url']}{otp_ep}", headers=upstream_headers(api_token, p["key"]), timeout=10)
             res_json = r.json()
             if (res_json.get("meta") or {}).get("code") == 0:
                 raw_list = ((res_json.get("data") or {}).get("rows")) or []
@@ -1879,6 +2034,20 @@ def _fetch_incoming_otps_for_panel(panel_key: str) -> list:
                             "message": str(item.get("message") or ""),
                             "sender": str(item.get("sender") or ""),
                         })
+        elif p["style"] == "zenex":
+            otp_ep = (p.get("extra_endpoints") or {}).get("success_otp") or p.get("otp_endpoint") or "/v1/numsuccess/info"
+            r = requests.get(f"{p['base_url']}{otp_ep}", headers=upstream_headers(api_token, p["key"]), timeout=10)
+            res_json = r.json()
+            data_obj = res_json.get("data") if isinstance(res_json.get("data"), dict) else {}
+            raw_list = data_obj.get("otps") or data_obj.get("rows") or res_json.get("otps") or []
+            for item in raw_list:
+                if isinstance(item, dict):
+                    msg_val = item.get("otp") or item.get("message") or item.get("sms") or ""
+                    otps.append({
+                        "number": str(item.get("number") or item.get("full_number") or ""),
+                        "message": str(msg_val),
+                        "sender": str(item.get("service") or item.get("sender") or ""),
+                    })
     except Exception:
         return []
     return otps
@@ -1991,6 +2160,53 @@ def _fetch_user_numbers_and_sync_otp(user_dict: dict, panel_key: str = None):
         })
 
     return formatted, current_balance
+
+
+# ---------------- BACKGROUND OTP LISTENER ----------------
+
+_BG_OTP_STARTED = False
+_BG_OTP_LOCK = threading.Lock()
+
+
+def _background_otp_listener_loop(interval_seconds: int = 5):
+    while True:
+        try:
+            now = time.time()
+            conn = get_db()
+            rows = conn.execute(
+                """SELECT DISTINCT user_email
+                   FROM user_numbers
+                   WHERE expires_ts > ? AND (otp_message IS NULL OR otp_message = '')""",
+                (now,)
+            ).fetchall()
+            conn.close()
+
+            for r in rows:
+                u_email = (r["user_email"] or "").strip().lower()
+                if not u_email:
+                    continue
+                u_dict = get_user_dict(u_email)
+                if u_dict and u_dict.get("status") == "ACTIVE":
+                    _fetch_user_numbers_and_sync_otp(u_dict)
+        except Exception as e:
+            print("Background OTP listener error:", repr(e))
+
+        time.sleep(interval_seconds)
+
+
+def start_background_otp_listener(interval_seconds: int = 5):
+    global _BG_OTP_STARTED
+    with _BG_OTP_LOCK:
+        if _BG_OTP_STARTED:
+            return
+        _BG_OTP_STARTED = True
+        t = threading.Thread(
+            target=_background_otp_listener_loop,
+            args=(interval_seconds,),
+            name="background-otp-listener",
+            daemon=True,
+        )
+        t.start()
 
 
 # ---------------- SESSION BRIDGE ENDPOINTS (MULTI-PANEL) ----------------
@@ -2120,9 +2336,11 @@ def _fetch_single_panel_console_hits(p: dict) -> list:
 
     hits = []
     if p["style"] == "sr1":
-        r = requests.get(f"{p['base_url']}/console", headers=upstream_headers(token, p["key"]), timeout=10)
+        ep = p.get("endpoint") or "/console"
+        r = requests.get(f"{p['base_url']}{ep}", headers=upstream_headers(token, p["key"]), timeout=10)
         res = r.json()
-        raw_hits = ((res or {}).get("data") or {}).get("hits") or []
+        list_key = (p.get("mapping") or {}).get("list_key") or "data.hits"
+        raw_hits = _extract_nested(res if isinstance(res, dict) else {}, list_key) or []
         for h in raw_hits:
             if isinstance(h, dict):
                 item = dict(h)
@@ -2133,7 +2351,8 @@ def _fetch_single_panel_console_hits(p: dict) -> list:
                 hits.append(item)
 
     elif p["style"] == "yehub":
-        r = requests.get(f"{p['base_url']}/console_data", headers=upstream_headers(token, p["key"]), timeout=10)
+        ep = p.get("endpoint") or "/console_data"
+        r = requests.get(f"{p['base_url']}{ep}", headers=upstream_headers(token, p["key"]), timeout=10)
         raw = r.json()
         for row in (raw.get("table") or []):
             if isinstance(row, list) and len(row) >= 4:
@@ -2152,7 +2371,8 @@ def _fetch_single_panel_console_hits(p: dict) -> list:
                 })
 
     elif p["style"] == "slvirtual":
-        r = requests.get(f"{p['base_url']}/live-console?limit=50", headers=upstream_headers(token, p["key"]), timeout=10)
+        ep = p.get("endpoint") or "/live-console"
+        r = requests.get(f"{p['base_url']}{ep}?limit=50", headers=upstream_headers(token, p["key"]), timeout=10)
         raw = r.json()
         for item in (raw.get("data") or []):
             if not isinstance(item, dict):
@@ -2195,31 +2415,39 @@ def _fetch_single_panel_console_hits(p: dict) -> list:
                 "country": item.get("country", ""),
                 "service": svc,
                 "sid": svc,
-                "time": t_val,
+                "time": _format_ts_or_ms(t_val) if t_val else "",
                 "ts": t_val,
-                "message": item.get("message", ""),
+                "message": item.get("message") or f"Active route ({item.get('tag', 'General')}) - {item.get('hits', 0)} hits",
                 "panel": p["key"],
                 "panel_name": p["name"],
             })
 
     elif p["style"] == "zebrasms":
-        r = requests.get(f"{p['base_url']}/publicapi/getupdate", headers=upstream_headers(token, p["key"]), timeout=10)
+        ep = p.get("endpoint") or "/publicapi/getupdate"
+        r = requests.get(f"{p['base_url']}{ep}", headers=upstream_headers(token, p["key"]), timeout=10)
         raw = r.json()
-        if (raw.get("meta") or {}).get("code") == 0:
-            for item in (((raw.get("data") or {}).get("rows")) or []):
+        meta_code = (raw.get("meta") or {}).get("code")
+        if meta_code == 0:
+            rows = ((raw.get("data") or {}).get("rows")) or []
+            for item in rows:
                 if not isinstance(item, dict):
                     continue
-                svc = str(item.get("sender") or "").strip()
-                t_val = item.get("at_ms")
+                svc = str(item.get("sender") or "SMS").strip()
+                raw_ts = item.get("at_ms")
+                formatted_time = _format_ts_or_ms(raw_ts)
+                num_str = str(item.get("number") or "").strip()
+                clean_digits = num_str.lstrip("+")
+                rng_guess = f"{clean_digits[:6]}XXX" if len(clean_digits) >= 6 else clean_digits
                 hits.append({
-                    "number": item.get("number", ""),
-                    "country": item.get("country", ""),
-                    "operator": item.get("operator", ""),
+                    "number": num_str,
+                    "range": rng_guess,
+                    "country": str(item.get("country") or ""),
+                    "operator": str(item.get("operator") or ""),
                     "service": svc,
                     "sid": svc,
-                    "time": t_val,
-                    "ts": t_val,
-                    "message": item.get("message", ""),
+                    "time": formatted_time,
+                    "ts": raw_ts,
+                    "message": str(item.get("message") or ""),
                     "panel": p["key"],
                     "panel_name": p["name"],
                 })
@@ -2227,22 +2455,40 @@ def _fetch_single_panel_console_hits(p: dict) -> list:
     return hits
 
 
+def _fetch_all_panels_console_hits():
+    combined_hits = []
+    errors = []
+    for pk in MASTER_API_CONFIG["panel_order"]:
+        p = PANELS.get(pk)
+        if not p or not get_panel_active_flag(pk):
+            continue
+        try:
+            combined_hits.extend(_fetch_single_panel_console_hits(p))
+        except Exception as e:
+            errors.append(f"{p['name']}: {e}")
+    return combined_hits, errors
+
+
 def _fetch_liveaccess_for_panel(p: dict) -> dict:
     token = get_api_token(p["key"])
     if p["style"] == "sr1":
-        r = requests.get(f"{p['base_url']}/liveaccess", headers=upstream_headers(token, p["key"]), timeout=10)
+        la_ep = (p.get("extra_endpoints") or {}).get("live_access") or "/liveaccess"
+        r = requests.get(f"{p['base_url']}{la_ep}", headers=upstream_headers(token, p["key"]), timeout=10)
         return _normalize_liveaccess_for_panel(p, r.json())
     if p["style"] == "yehub":
-        r = requests.get(f"{p['base_url']}/live_access_data", headers=upstream_headers(token, p["key"]), timeout=10)
+        la_ep = (p.get("extra_endpoints") or {}).get("live_access") or "/live_access_data"
+        r = requests.get(f"{p['base_url']}{la_ep}", headers=upstream_headers(token, p["key"]), timeout=10)
         return _normalize_liveaccess_for_panel(p, r.json())
     if p["style"] == "slvirtual":
-        r = requests.get(f"{p['base_url']}/available-countries", headers=upstream_headers(token, p["key"]), timeout=10)
+        la_ep = (p.get("extra_endpoints") or {}).get("live_access") or "/available-countries"
+        r = requests.get(f"{p['base_url']}{la_ep}", headers=upstream_headers(token, p["key"]), timeout=10)
         return _normalize_liveaccess_for_panel(p, r.json())
     if p["style"] == "zenex":
-        ep = p.get("endpoint") or "/v1/active-ranges"
-        r = requests.get(f"{p['base_url']}{ep}", headers=upstream_headers(token, p["key"]), timeout=10)
+        la_ep = (p.get("extra_endpoints") or {}).get("live_access") or p.get("endpoint") or "/v1/active-ranges"
+        r = requests.get(f"{p['base_url']}{la_ep}", headers=upstream_headers(token, p["key"]), timeout=10)
         return _normalize_liveaccess_for_panel(p, r.json())
     if p["style"] == "zebrasms":
+        la_ep = (p.get("extra_endpoints") or {}).get("live_access") or "/publicapi/liveaccess"
         params = {}
         try:
             sender_q = (request.args.get("sender") or "").strip()
@@ -2251,7 +2497,7 @@ def _fetch_liveaccess_for_panel(p: dict) -> dict:
         except RuntimeError:
             pass
         r = requests.get(
-            f"{p['base_url']}/publicapi/liveaccess",
+            f"{p['base_url']}{la_ep}",
             headers=upstream_headers(token, p["key"]),
             params=params,
             timeout=10,
@@ -2264,7 +2510,7 @@ def _fetch_liveaccess_for_panel(p: dict) -> dict:
 @user_login_required
 def bridge_console(user):
     explicit_panel = (request.args.get("panel") or request.headers.get("X-Panel") or "").strip()
-    if explicit_panel:
+    if explicit_panel and explicit_panel.lower() not in ("all", "master", "auto"):
         p = resolve_panel(explicit_panel)
         if not get_panel_active_flag(p["key"]):
             return panel_off_json(p["key"], 503)
@@ -2284,17 +2530,7 @@ def bridge_console(user):
     if not get_panel_active_flag("1"):
         return panel_off_json("1", 503)
 
-    combined_hits = []
-    errors = []
-    for pk in ["1", "2", "3", "4", "5"]:
-        p = PANELS[pk]
-        if not get_panel_active_flag(pk):
-            continue
-        try:
-            combined_hits.extend(_fetch_single_panel_console_hits(p))
-        except Exception as e:
-            errors.append(f"{p['name']}: {e}")
-
+    combined_hits, errors = _fetch_all_panels_console_hits()
     return jsonify({
         "meta": {"code": 200, "status": "success"},
         "panel": "all",
@@ -2328,11 +2564,14 @@ def bridge_liveaccess(user):
 @user_login_required
 def bridge_getnum(user):
     payload = request.get_json(silent=True) or {}
-    p = resolve_panel(payload.get("panel"))
-    if not get_panel_active_flag(p["key"]):
-        return panel_off_json(p["key"], 503)
+    raw_panel = str(payload.get("panel") or "").strip()
     raw_range = str(payload.get("range", "")).strip()
-    return jsonify(_create_number_for_user(user, raw_range, p["key"]))
+    if raw_panel and raw_panel.lower() not in ("master", "auto", "all"):
+        p = resolve_panel(raw_panel)
+        if not get_panel_active_flag(p["key"]):
+            return panel_off_json(p["key"], 503)
+        return jsonify(_create_number_for_user(user, raw_range, p["key"]))
+    return jsonify(_create_number_for_user(user, raw_range, "master"))
 
 
 @app.route("/api/bridge/my-numbers")
@@ -2351,7 +2590,39 @@ def bridge_my_numbers(user):
     })
 
 
-# ---------------- PUBLIC / USER API v1 ENDPOINTS ----------------
+# ---------------- PUBLIC / USER & MASTER API v1 ENDPOINTS ----------------
+
+@app.route("/api/v1/master/config", methods=["GET"])
+@public_api_key_required
+def api_v1_master_config(user):
+    return jsonify({
+        "meta": {"code": 200, "status": "success"},
+        "master_config": MASTER_API_CONFIG,
+        "panels": get_panels_status_map(),
+    })
+
+
+@app.route("/api/v1/master/getnum", methods=["POST"])
+@public_api_key_required
+def api_v1_master_getnum(user):
+    payload = request.get_json(silent=True) or request.form.to_dict() or {}
+    raw_range = str(
+        payload.get("range")
+        or payload.get("rid")
+        or payload.get("range_id")
+        or payload.get("rangePrefix")
+        or ""
+    ).strip()
+    res = _create_number_for_user(user, raw_range, "master")
+    if not res.get("ok"):
+        return jsonify({"meta": {"code": 400, "status": "error"}, "message": res.get("message")}), 400
+    return jsonify({
+        "meta": {"code": 200, "status": "success"},
+        "matched_panel": res.get("matched_panel"),
+        "matched_panel_name": res.get("matched_panel_name"),
+        "data": res["item"],
+    })
+
 
 @app.route("/api/v1/liveaccess", methods=["GET"])
 @public_api_key_required
@@ -2369,14 +2640,31 @@ def api_v1_liveaccess(user):
 @public_api_key_required
 def api_v1_getnum(user):
     payload = request.get_json(silent=True) or request.form.to_dict() or {}
-    p = resolve_panel(payload.get("panel"))
-    if not get_panel_active_flag(p["key"]):
-        return panel_off_json(p["key"], 503)
-    raw_range = str(payload.get("range") or payload.get("rid") or payload.get("range_id") or payload.get("rangePrefix") or "").strip()
-    res = _create_number_for_user(user, raw_range, p["key"])
+    raw_panel = str(payload.get("panel") or request.args.get("panel") or request.headers.get("X-Panel") or "master").strip()
+    raw_range = str(
+        payload.get("range")
+        or payload.get("rid")
+        or payload.get("range_id")
+        or payload.get("rangePrefix")
+        or ""
+    ).strip()
+
+    if raw_panel and raw_panel.lower() not in ("master", "auto", "all"):
+        p = resolve_panel(raw_panel)
+        if not get_panel_active_flag(p["key"]):
+            return panel_off_json(p["key"], 503)
+        res = _create_number_for_user(user, raw_range, p["key"])
+    else:
+        res = _create_number_for_user(user, raw_range, "master")
+
     if not res.get("ok"):
         return jsonify({"meta": {"code": 400, "status": "error"}, "message": res.get("message")}), 400
-    return jsonify({"meta": {"code": 200, "status": "success"}, "data": res["item"]})
+    return jsonify({
+        "meta": {"code": 200, "status": "success"},
+        "matched_panel": res.get("matched_panel") or res["item"].get("panel"),
+        "matched_panel_name": res.get("matched_panel_name") or res["item"].get("panel_name"),
+        "data": res["item"],
+    })
 
 
 @app.route("/api/v1/my-numbers", methods=["GET"])
@@ -2397,19 +2685,28 @@ def api_v1_my_numbers(user):
 @app.route("/api/v1/console", methods=["GET"])
 @public_api_key_required
 def api_v1_console(user):
-    p = resolve_panel()
+    raw_panel = (request.args.get("panel") or request.headers.get("X-Panel") or "all").strip()
+    if raw_panel.lower() in ("all", "master", "auto"):
+        hits, errors = _fetch_all_panels_console_hits()
+        return jsonify({
+            "meta": {"code": 200, "status": "success"},
+            "panel": "all",
+            "errors": errors,
+            "data": {"hits": hits},
+        })
+
+    p = resolve_panel(raw_panel)
     if not get_panel_active_flag(p["key"]):
         return panel_off_json(p["key"], 503)
-    conn = get_db()
-    logs = [dict(r) for r in conn.execute(
-        "SELECT id, created_at, number_val, country, service, rate, message, panel_key FROM otp_logs WHERE user_email = ? AND panel_key = ? ORDER BY id DESC LIMIT 100",
-        (user["email"], p["key"])
-    ).fetchall()]
-    conn.close()
-    return jsonify({
-        "meta": {"code": 200, "status": "success"},
-        "data": {"hits": logs}
-    })
+    try:
+        hits = _fetch_single_panel_console_hits(p)
+        return jsonify({
+            "meta": {"code": 200, "status": "success"},
+            "panel": p["key"],
+            "data": {"hits": hits},
+        })
+    except Exception as e:
+        return jsonify({"meta": {"code": 500, "status": "error"}, "message": str(e), "data": {"hits": []}}), 500
 
 
 # ---------------- USER PAYMENT (Saved Addresses & Withdraw) ----------------
@@ -2542,6 +2839,7 @@ def public_api_docs():
         public_docs=True,
         panel_brand_name=PANEL_BRAND_NAME,
         panels_status=get_panels_status_map(),
+        master_config=MASTER_API_CONFIG,
     )
 
 
@@ -2635,6 +2933,7 @@ def logout():
 
 
 init_db()
+start_background_otp_listener(5)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
