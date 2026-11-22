@@ -32,7 +32,7 @@ PANELS = {
     "1": {
         "key": "1",
         "slug": "panel1",
-        "name": os.environ.get("PANEL1_BRAND_NAME", "1 server").strip() or "1 server",
+        "name": "1 server",
         "setting_key": "voltx_panel_active",
         "base_url": os.environ.get(
             "PANEL1_BASE_URL",
@@ -46,7 +46,7 @@ PANELS = {
     "2": {
         "key": "2",
         "slug": "panel2",
-        "name": os.environ.get("PANEL2_BRAND_NAME", "2 server").strip() or "2 server",
+        "name": "2 server",
         "setting_key": "panel_2_active",
         "base_url": os.environ.get(
             "PANEL2_BASE_URL",
@@ -60,7 +60,7 @@ PANELS = {
     "3": {
         "key": "3",
         "slug": "panel3",
-        "name": os.environ.get("PANEL3_BRAND_NAME", "3 server").strip() or "3 server",
+        "name": "3 server",
         "setting_key": "panel_3_active",
         "base_url": os.environ.get(
             "PANEL3_BASE_URL",
@@ -1965,30 +1965,52 @@ def _fetch_single_panel_console_hits(p: dict) -> list:
                 item = dict(h)
                 item["panel"] = p["key"]
                 item["panel_name"] = p["name"]
+                if not item.get("sid") and item.get("service"):
+                    item["sid"] = item.get("service")
                 hits.append(item)
+
     elif p["style"] == "yehub":
         r = requests.get(f"{p['base_url']}/console_data", headers=upstream_headers(token, p["key"]), timeout=10)
         raw = r.json()
         for row in (raw.get("table") or []):
             if isinstance(row, list) and len(row) >= 4:
+                svc = str(row[3] or "").strip()
+                ts_val = row[4] if len(row) > 4 else None
                 hits.append({
                     "range": row[0],
                     "country": row[1],
                     "message": row[2],
-                    "service": row[3],
-                    "ts": row[4] if len(row) > 4 else None,
+                    "service": svc,
+                    "sid": svc,
+                    "ts": ts_val,
+                    "time": ts_val,
                     "panel": p["key"],
                     "panel_name": p["name"],
                 })
+
     else:  # slvirtual
         r = requests.get(f"{p['base_url']}/live-console?limit=50", headers=upstream_headers(token, p["key"]), timeout=10)
         raw = r.json()
         for item in (raw.get("data") or []):
+            if not isinstance(item, dict):
+                continue
+            svc = str(item.get("service") or "").strip()
+            t_val = (
+                item.get("time")
+                or item.get("timestamp")
+                or item.get("createdAt")
+                or item.get("created_at")
+                or item.get("ts")
+                or None
+            )
             hits.append({
                 "number": item.get("maskedNumber", ""),
                 "range": item.get("rangePrefix") or item.get("tag", ""),
                 "country": item.get("country", ""),
-                "service": item.get("service", ""),
+                "service": svc,
+                "sid": svc,
+                "time": t_val,
+                "ts": t_val,
                 "message": item.get("rawSnippet") or item.get("otpCode", ""),
                 "panel": p["key"],
                 "panel_name": p["name"],
