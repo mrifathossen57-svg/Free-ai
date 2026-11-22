@@ -1869,28 +1869,57 @@ def _create_number_for_single_panel(user_dict: dict, raw_range: str, panel_key: 
         elif p["style"] == "zenex":
             num_ep = (p.get("extra_endpoints") or {}).get("get_number") or p.get("number_endpoint") or "/v1/getnum"
             req_range = str(raw_range or clean_rid).strip()
+            payload_body = {
+                "is_national": False,
+                "remove_plus": False,
+            }
+            if req_range:
+                payload_body["range"] = req_range
+
             r = requests.post(
                 f"{p['base_url']}{num_ep}",
                 headers=upstream_headers(api_token, p["key"]),
-                json={
-                    "range": req_range,
-                    "is_national": False,
-                    "remove_plus": False,
-                },
+                json=payload_body,
                 timeout=12,
             )
-            res_json = r.json()
+            try:
+                res_json = r.json()
+            except ValueError:
+                return {"ok": False, "message": f"Zenex invalid JSON (HTTP {r.status_code}): {r.text[:150]}"}
+
+            if not isinstance(res_json, dict):
+                return {"ok": False, "message": f"Zenex unexpected response (HTTP {r.status_code})."}
+
             meta = res_json.get("meta") if isinstance(res_json.get("meta"), dict) else {}
             meta_code = meta.get("code")
             meta_status = str(meta.get("status") or "").lower()
-            data = res_json.get("data") if isinstance(res_json.get("data"), dict) else {}
+            top_status = str(res_json.get("status") or "").lower()
 
-            if (meta_code is not None and meta_code not in (0, 200)) or (meta_status and meta_status != "success" and not data):
-                return {"ok": False, "message": res_json.get("message") or "Out of stock or invalid range."}
+            data = res_json.get("data") if isinstance(res_json.get("data"), dict) else res_json
+            full_num = str(
+                data.get("full_number")
+                or data.get("number")
+                or data.get("copy")
+                or data.get("phone")
+                or ""
+            ).strip()
 
-            full_num = str(data.get("full_number") or data.get("number") or data.get("copy") or "").strip()
-            if not full_num:
-                return {"ok": False, "message": res_json.get("message") or "No number returned by Zenex."}
+            explicit_fail = (
+                res_json.get("success") is False
+                or (meta_code is not None and meta_code not in (0, 200, "0", "200"))
+                or (meta_status and meta_status not in ("success", "ok"))
+                or (top_status and top_status not in ("success", "ok"))
+            )
+
+            if explicit_fail or not full_num:
+                err_msg = (
+                    res_json.get("message")
+                    or res_json.get("error")
+                    or meta.get("message")
+                    or f"Zenex getnum failed (HTTP {r.status_code})"
+                )
+                return {"ok": False, "message": err_msg}
+
             if not full_num.startswith("+"):
                 full_num = f"+{full_num}"
             no_plus = full_num.lstrip("+")
