@@ -6,7 +6,7 @@
   <div class="flex items-center justify-between">
     <div>
       <h1 class="text-2xl font-bold">SR Admin Control Panel</h1>
-      <p class="text-xs text-gray-400">Manage Agent Mail Auto Account, {{ panel_name }} Panel, Agents, Rates, OTP Rate Limits, OTP Logs &amp; Withdrawals</p>
+      <p class="text-xs text-gray-400">Manage Agent Mail Auto Account, Multi-Panel Control, Agents, Rates, OTP Rate Limits, OTP Logs &amp; Withdrawals</p>
     </div>
     <a href="{{ url_for('logout') }}" class="px-4 py-2 rounded-xl bg-[#181f1b] text-xs text-rose-400">Logout</a>
   </div>
@@ -33,33 +33,43 @@
     </form>
   </div>
 
-  <!-- SR 1 Panel Active Switch -->
-  <div class="card rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-    <div class="space-y-1">
-      <div class="flex items-center gap-2">
-        <h2 class="font-bold text-white">{{ panel_name }} Panel</h2>
-        {% if voltx_panel_active %}
-          <span class="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-950 text-emerald-400 border border-emerald-700/40">ACTIVE</span>
-        {% else %}
-          <span class="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-rose-950 text-rose-400 border border-rose-700/40">OFF</span>
-        {% endif %}
+  <!-- 3 Panels Independent Active Switches -->
+  <div class="space-y-4">
+    {% set panels_ui = [
+      {"key": "1", "title": panel_name, "active": voltx_panel_active},
+      {"key": "2", "title": "YEHUB", "active": panel_2_active if panel_2_active is defined else true},
+      {"key": "3", "title": "SL Virtual", "active": panel_3_active if panel_3_active is defined else true}
+    ] %}
+
+    {% for p in panels_ui %}
+    <div class="card rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div class="space-y-1">
+        <div class="flex items-center gap-2">
+          <h2 class="font-bold text-white">{{ p.title }} Panel</h2>
+          {% if p.active %}
+            <span class="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-950 text-emerald-400 border border-emerald-700/40">ACTIVE</span>
+          {% else %}
+            <span class="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-rose-950 text-rose-400 border border-rose-700/40">OFF</span>
+          {% endif %}
+        </div>
+        <p class="text-xs text-gray-400">
+          Control the <span class="text-white font-semibold">{{ p.title }}</span> panel independently.
+          Even if other panels are OFF, <span class="text-white font-semibold">{{ p.title }}</span> works normally when <span class="text-emerald-400 font-semibold">ON</span>.
+        </p>
       </div>
-      <p class="text-xs text-gray-400">
-        Control the <span class="text-white font-semibold">{{ panel_name }}</span> console panel on the website.
-        When <span class="text-rose-400 font-semibold">OFF</span>, the {{ panel_name }} panel is disabled across the site.
-      </p>
+      <form method="POST" action="{{ url_for('toggle_any_panel', panel_key=p.key) }}">
+        {% if p.active %}
+          <button type="submit" class="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold">
+            Status: ON (Click to Turn OFF)
+          </button>
+        {% else %}
+          <button type="submit" class="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold">
+            Status: OFF (Click to Turn ON)
+          </button>
+        {% endif %}
+      </form>
     </div>
-    <form method="POST" action="{{ url_for('toggle_voltx_panel') }}">
-      {% if voltx_panel_active %}
-        <button type="submit" class="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold">
-          Status: ON (Click to Turn OFF)
-        </button>
-      {% else %}
-        <button type="submit" class="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold">
-          Status: OFF (Click to Turn ON)
-        </button>
-      {% endif %}
-    </form>
+    {% endfor %}
   </div>
 
   <!-- Add & Remove Agent Email -->
@@ -199,6 +209,7 @@
         <div class="p-3 rounded-xl bg-[#0c0f0d] flex flex-wrap items-center justify-between gap-2">
           <div>
             <span class="font-mono text-white font-semibold">{{ log.number_val }}</span>
+            • Panel: <span class="text-sky-400">Panel {{ log.panel_key or '1' }}</span>
             • Country: <span class="text-amber-300">{{ log.country }}</span>
             • Service: <span class="text-emerald-400">{{ log.service }}</span>
             • User: {{ log.user_email }}
