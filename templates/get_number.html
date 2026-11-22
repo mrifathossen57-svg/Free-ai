@@ -1,45 +1,162 @@
 {% extends "base.html" %}
 {% block title %}Get Number{% endblock %}
 {% block content %}
-{% set is_panel_on = voltx_panel_active if voltx_panel_active is defined else true %}
-{% set panel_name = panel_brand_name if panel_brand_name is defined else "SR 1" %}
+{% set p_map = {
+  "1": {"key": "1", "name": "1 server", "active": voltx_panel_active if voltx_panel_active is defined else true},
+  "2": {"key": "2", "name": "2 server", "active": true},
+  "3": {"key": "3", "name": "3 server", "active": true}
+} %}
 
 <h1 class="text-2xl font-bold mb-1">Get Number</h1>
-<p class="text-sm text-gray-400 mb-6">Paste range (e.g. 22501XXX) to allocate a number. Numbers auto-expire after 15 minutes.</p>
+<p class="text-sm text-gray-400 mb-4">Select an active panel and paste range (e.g. 22501XXX) to allocate a number. Numbers auto-expire after 15 minutes.</p>
 
-{% if not is_panel_on %}
-  <div class="card rounded-2xl p-6 border border-rose-700/40 bg-rose-950/20 space-y-1 mb-6">
-    <h2 class="text-base font-bold text-rose-300">{{ panel_name }} Panel is OFF</h2>
-    <p class="text-xs text-gray-400">This panel has been turned off by Admin.</p>
-  </div>
-{% else %}
-  <div id="getnum-off-banner" class="card rounded-2xl p-6 border border-rose-700/40 bg-rose-950/20 space-y-1 mb-6 hidden">
-    <div class="text-base font-bold text-rose-300">{{ panel_name }} Panel is OFF</div>
-    <div id="getnum-off-msg" class="text-xs text-gray-400">This panel has been turned off by Admin.</div>
-  </div>
+<!-- Panel Selector Tabs -->
+<div class="flex flex-wrap gap-2 mb-6" id="panel-tabs">
+  {% for pk in ["1", "2", "3"] %}
+    {% set p_info = p_map.get(pk, {"key": pk, "name": pk ~ " server", "active": true}) %}
+    <button type="button"
+            data-panel="{{ pk }}"
+            onclick="selectPanel('{{ pk }}')"
+            class="panel-tab px-4 py-2 rounded-xl text-xs font-semibold border transition flex items-center gap-2 bg-[#141916] border-[#242e28] text-gray-300 hover:border-emerald-500/50">
+      <span>{{ p_info.name }}</span>
+      <span class="inline-block w-2 h-2 rounded-full {{ 'bg-emerald-400' if p_info.active else 'bg-rose-500' }}"></span>
+    </button>
+  {% endfor %}
+</div>
 
-  <div id="getnum-form-card" class="card rounded-2xl p-5 mb-6">
-    <label class="block text-xs text-emerald-400 uppercase font-semibold mb-2">Enter Number Range</label>
-    <div class="flex flex-col sm:flex-row gap-3">
-      <input id="range-input" type="text" placeholder="# 22501XXX or 26134"
-             class="flex-1 px-4 py-3 rounded-xl bg-[#0b0e0c] border border-[#242d28] text-white font-mono text-sm focus:outline-none focus:border-emerald-500" />
+<div id="getnum-off-banner" class="card rounded-2xl p-6 border border-rose-700/40 bg-rose-950/20 space-y-1 mb-6 hidden">
+  <div id="getnum-off-title" class="text-base font-bold text-rose-300">Panel is OFF</div>
+  <div id="getnum-off-msg" class="text-xs text-gray-400">This panel has been turned off by Admin.</div>
+</div>
+
+<div id="getnum-form-card" class="card rounded-2xl p-5 mb-6">
+  <div class="flex items-center justify-between mb-2">
+    <label class="block text-xs text-emerald-400 uppercase font-semibold">Enter Number Range</label>
+    <span id="active-panel-label" class="text-xs font-mono text-gray-400"></span>
+  </div>
+  <div class="flex flex-col sm:flex-row gap-3">
+    <input id="range-input" type="text" placeholder="# 22501XXX or 26134"
+           oninput="saveRangeToStorage(this.value)"
+           class="flex-1 px-4 py-3 rounded-xl bg-[#0b0e0c] border border-[#242d28] text-white font-mono text-sm focus:outline-none focus:border-emerald-500" />
+    <div class="flex gap-2 shrink-0">
+      <button type="button" id="clear-range-btn" onclick="clearSavedRange()"
+              class="px-4 py-3 rounded-xl bg-[#18201c] hover:bg-[#222d27] text-gray-300 border border-[#2a3730] font-semibold text-xs">
+        Clear
+      </button>
       <button id="get-num-btn" onclick="allocateNumber()"
-              class="px-6 py-3 rounded-xl accent-btn text-white font-semibold text-sm shrink-0">
+              class="px-6 py-3 rounded-xl accent-btn text-white font-semibold text-sm">
         Get Number
       </button>
     </div>
-    <div id="status-msg" class="text-xs mt-3 text-amber-300 hidden"></div>
   </div>
-{% endif %}
+  <div id="status-msg" class="text-xs mt-3 text-amber-300 hidden"></div>
+</div>
 
-<h2 class="text-sm font-semibold text-gray-400 uppercase mb-3">Allocated Numbers & Live OTP</h2>
+<h2 class="text-sm font-semibold text-gray-400 uppercase mb-3">Allocated Numbers &amp; Live OTP</h2>
 <div id="numbers-list" class="space-y-3"></div>
 
 <script>
+const SERVER_LABELS = {
+  "1": "1 server",
+  "2": "2 server",
+  "3": "3 server"
+};
+const SAVED_RANGE_KEY = 'saved_getnum_range';
+const PANELS_META = {{ p_map | tojson }};
 const params = new URLSearchParams(window.location.search);
 const rangeInputEl = document.getElementById('range-input');
-if (rangeInputEl && params.get('range')) {
-  rangeInputEl.value = params.get('range');
+
+function saveRangeToStorage(val) {
+  const trimmed = String(val ?? '').trim();
+  if (trimmed) {
+    localStorage.setItem(SAVED_RANGE_KEY, trimmed);
+  } else {
+    localStorage.removeItem(SAVED_RANGE_KEY);
+  }
+}
+
+function clearSavedRange() {
+  localStorage.removeItem(SAVED_RANGE_KEY);
+  if (rangeInputEl) {
+    rangeInputEl.value = '';
+    rangeInputEl.focus();
+  }
+  const url = new URL(window.location.href);
+  if (url.searchParams.has('range')) {
+    url.searchParams.delete('range');
+    window.history.replaceState({}, '', url.toString());
+  }
+}
+
+function initRangeValue() {
+  if (!rangeInputEl) return;
+  const qRange = (params.get('range') || '').trim();
+  if (qRange) {
+    rangeInputEl.value = qRange;
+    saveRangeToStorage(qRange);
+    return;
+  }
+  const savedRange = (localStorage.getItem(SAVED_RANGE_KEY) || '').trim();
+  if (savedRange) {
+    rangeInputEl.value = savedRange;
+  }
+}
+
+function getInitialPanel() {
+  const qPanel = params.get('panel');
+  if (qPanel && PANELS_META[qPanel] && PANELS_META[qPanel].active) {
+    return qPanel;
+  }
+  const saved = localStorage.getItem('selected_panel_key');
+  if (saved && PANELS_META[saved] && PANELS_META[saved].active) {
+    return saved;
+  }
+  for (const k of ['1', '2', '3']) {
+    if (PANELS_META[k] && PANELS_META[k].active) {
+      return k;
+    }
+  }
+  return qPanel || saved || '1';
+}
+
+let currentPanel = getInitialPanel();
+
+function syncPanelUI() {
+  const meta = PANELS_META[currentPanel] || { name: SERVER_LABELS[currentPanel] || `${currentPanel} server`, active: true };
+  document.querySelectorAll('.panel-tab').forEach(btn => {
+    const k = btn.getAttribute('data-panel');
+    if (k === currentPanel) {
+      btn.className = 'panel-tab px-4 py-2 rounded-xl text-xs font-semibold border transition flex items-center gap-2 bg-emerald-600/20 border-emerald-500 text-emerald-300';
+    } else {
+      btn.className = 'panel-tab px-4 py-2 rounded-xl text-xs font-semibold border transition flex items-center gap-2 bg-[#141916] border-[#242e28] text-gray-300 hover:border-emerald-500/50';
+    }
+  });
+
+  const labelEl = document.getElementById('active-panel-label');
+  if (labelEl) labelEl.innerText = `Active: ${meta.name}`;
+
+  const banner = document.getElementById('getnum-off-banner');
+  const formCard = document.getElementById('getnum-form-card');
+  const offTitle = document.getElementById('getnum-off-title');
+  const offMsg = document.getElementById('getnum-off-msg');
+
+  if (!meta.active) {
+    if (offTitle) offTitle.innerText = `${meta.name} is OFF`;
+    if (offMsg) offMsg.innerText = `${meta.name} has been turned off by Admin. Select another active server above.`;
+    if (banner) banner.classList.remove('hidden');
+    if (formCard) formCard.classList.add('hidden');
+  } else {
+    if (banner) banner.classList.add('hidden');
+    if (formCard) formCard.classList.remove('hidden');
+  }
+}
+
+function selectPanel(panelKey) {
+  currentPanel = panelKey;
+  localStorage.setItem('selected_panel_key', currentPanel);
+  const msg = document.getElementById('status-msg');
+  if (msg) msg.classList.add('hidden');
+  syncPanelUI();
 }
 
 function formatTimer(sec) {
@@ -87,13 +204,19 @@ function copyText(txt, btn) {
   setTimeout(() => btn.innerText = old, 1200);
 }
 
-function showGetnumPanelOff(msgText = 'This panel has been turned off by Admin.') {
+function showGetnumPanelOff(msgText = 'This server has been turned off by Admin.') {
+  if (PANELS_META[currentPanel]) {
+    PANELS_META[currentPanel].active = false;
+  }
   const banner = document.getElementById('getnum-off-banner');
   const formCard = document.getElementById('getnum-form-card');
+  const offTitle = document.getElementById('getnum-off-title');
   const offMsg = document.getElementById('getnum-off-msg');
+  const pName = (PANELS_META[currentPanel] && PANELS_META[currentPanel].name) || SERVER_LABELS[currentPanel] || `${currentPanel} server`;
+  if (offTitle) offTitle.innerText = `${pName} is OFF`;
+  if (offMsg) offMsg.innerText = msgText;
   if (banner) banner.classList.remove('hidden');
   if (formCard) formCard.classList.add('hidden');
-  if (offMsg) offMsg.innerText = msgText;
 }
 
 async function allocateNumber() {
@@ -103,7 +226,11 @@ async function allocateNumber() {
   if (!input || !btn) return;
 
   const rangeVal = input.value.trim();
-  if (!rangeVal) return;
+  if (!rangeVal && currentPanel !== '3') return;
+
+  if (rangeVal) {
+    saveRangeToStorage(rangeVal);
+  }
 
   btn.disabled = true;
   btn.innerText = 'Allocating...';
@@ -113,16 +240,16 @@ async function allocateNumber() {
     const res = await fetch('/api/bridge/getnum', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ range: rangeVal })
+      body: JSON.stringify({ range: rangeVal, panel: currentPanel })
     });
     const data = await res.json();
 
     if (
       data.panel_active === false ||
-      data.voltx_active === false ||
+      (currentPanel === '1' && data.voltx_active === false) ||
       (data.meta && data.meta.code === 503)
     ) {
-      showGetnumPanelOff(data.message || 'This panel has been turned off by Admin.');
+      showGetnumPanelOff(data.message || 'This server has been turned off by Admin.');
       return;
     }
 
@@ -151,11 +278,23 @@ async function refreshNumbers() {
   try {
     const res = await fetch('/api/bridge/my-numbers', { cache: 'no-store' });
     const data = await res.json();
-    if (data.panel_active === false) {
-      showGetnumPanelOff('This panel has been turned off by Admin.');
+    if (data.panels) {
+      for (const [k, v] of Object.entries(data.panels)) {
+        PANELS_META[k] = {
+          ...v,
+          name: SERVER_LABELS[k] || v.name || `${k} server`
+        };
+      }
+      syncPanelUI();
     }
     if (data.ok) {
-      cachedNumbers = data.numbers || [];
+      cachedNumbers = (data.numbers || []).map(n => {
+        const pKey = String(n.panel ?? n.panel_key ?? '');
+        return {
+          ...n,
+          panel_name: SERVER_LABELS[pKey] || n.panel_name || (pKey ? `${pKey} server` : '')
+        };
+      });
       renderNumbers();
     }
   } catch (e) {}
@@ -174,6 +313,16 @@ function renderNumbers() {
     const timerBadge = n.expired
       ? `<span class="px-2.5 py-1 rounded-lg bg-rose-950 text-rose-400 text-xs font-semibold">EXPIRED (15m)</span>`
       : `<span class="px-2.5 py-1 rounded-lg bg-amber-950/70 text-amber-300 font-mono text-xs font-semibold">⏳ ${formatTimer(n.remaining_seconds)}</span>`;
+
+    const panelBadge = n.panel_name
+      ? `<span class="px-2 py-0.5 rounded-md bg-sky-950/70 text-sky-300 border border-sky-700/40 text-[11px] font-semibold">${escapeHtml(n.panel_name)}</span>`
+      : '';
+
+    const rangeVal = String(n.range ?? '').trim();
+    const rangeHtml = rangeVal
+      ? `<button type="button" onclick="copyText('${escapeAttr(rangeVal)}', this)" title="Click to copy range"
+                 class="font-mono text-amber-300 underline decoration-dotted underline-offset-2 hover:text-emerald-300 cursor-pointer">${escapeHtml(rangeVal)}</button>`
+      : `<span class="font-mono text-gray-500">-</span>`;
 
     const otpToCopy = extractOtpValue(n.otp_message);
     const otpArea = n.otp_message
@@ -197,10 +346,11 @@ function renderNumbers() {
                     class="px-2.5 py-1 rounded-lg bg-[#1a221e] text-xs text-emerald-300 hover:bg-[#232e28]">
               Copy
             </button>
+            ${panelBadge}
             ${timerBadge}
           </div>
           <div class="text-xs text-gray-400">
-            Country: <span class="text-gray-200">${escapeHtml(n.country)}</span> • Operator: <span class="text-gray-200">${escapeHtml(n.operator)}</span> • Range: <span class="font-mono">${escapeHtml(n.range)}</span>
+            Country: <span class="text-gray-200">${escapeHtml(n.country)}</span> • Operator: <span class="text-gray-200">${escapeHtml(n.operator)}</span> • Range: ${rangeHtml}
           </div>
         </div>
 
@@ -222,6 +372,8 @@ setInterval(() => {
   renderNumbers();
 }, 1000);
 
+initRangeValue();
+syncPanelUI();
 refreshNumbers();
 setInterval(refreshNumbers, 5000);
 </script>
