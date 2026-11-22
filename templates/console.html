@@ -122,28 +122,56 @@
     return rawSid || "SERVICE";
   }
 
-  function formatHitTime(h) {
-    const rawTime =
+  function getRawTimeValue(h) {
+    return (
       h.time ??
       h.timestamp ??
       h.created_at ??
       h.createdAt ??
       h.ts ??
       h.date ??
-      "";
+      ""
+    );
+  }
 
+  function getHitTimestamp(h) {
+    const rawTime = getRawTimeValue(h);
+    if (rawTime === null || rawTime === undefined || rawTime === "") {
+      return 0;
+    }
+
+    if (typeof rawTime === "number") {
+      return rawTime < 1e12 ? rawTime * 1000 : rawTime;
+    }
+
+    const str = String(rawTime).trim();
+    if (/^\d+(\.\d+)?$/.test(str)) {
+      const num = Number(str);
+      return num < 1e12 ? num * 1000 : num;
+    }
+
+    if (/^\d{1,2}:\d{2}(:\d{2})?(\s?(AM|PM))?$/i.test(str)) {
+      const today = new Date().toISOString().slice(0, 10);
+      const parsedToday = new Date(`${today} ${str}`).getTime();
+      if (!Number.isNaN(parsedToday)) return parsedToday;
+    }
+
+    const parsed = new Date(str).getTime();
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+
+  function formatHitTime(h) {
+    const rawTime = getRawTimeValue(h);
     if (rawTime === null || rawTime === undefined || rawTime === "") {
       return "";
     }
 
-    // Jodi already HH:MM:SS ba HH:MM format-e thake
     if (typeof rawTime === "string" && /^\d{1,2}:\d{2}(:\d{2})?(\s?(AM|PM))?$/i.test(rawTime.trim())) {
       return rawTime.trim();
     }
 
     let d = null;
     if (typeof rawTime === "number") {
-      // 10-digit seconds hole ms-e convert koro
       const ms = rawTime < 1e12 ? rawTime * 1000 : rawTime;
       d = new Date(ms);
     } else {
@@ -282,7 +310,10 @@
       return;
     }
 
-    box.innerHTML = filteredHits.map(h => {
+    // সব সার্ভারের হিট সময় অনুযায়ী মিশিয়ে নিচে নিচে দেখানো (নতুনটা আগে)
+    const sortedHits = [...filteredHits].sort((a, b) => getHitTimestamp(b) - getHitTimestamp(a));
+
+    box.innerHTML = sortedHits.map(h => {
       const serviceLabel = resolveServiceName(h);
       const t = formatHitTime(h);
       const srv = detectHitServer(h);
