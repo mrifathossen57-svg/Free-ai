@@ -32,7 +32,7 @@ PANELS = {
     "1": {
         "key": "1",
         "slug": "panel1",
-        "name": "1 server",
+        "name": os.environ.get("PANEL1_BRAND_NAME", "1 server").strip() or "1 server",
         "setting_key": "voltx_panel_active",
         "base_url": os.environ.get(
             "PANEL1_BASE_URL",
@@ -46,7 +46,7 @@ PANELS = {
     "2": {
         "key": "2",
         "slug": "panel2",
-        "name": "2 server",
+        "name": os.environ.get("PANEL2_BRAND_NAME", "2 server").strip() or "2 server",
         "setting_key": "panel_2_active",
         "base_url": os.environ.get(
             "PANEL2_BASE_URL",
@@ -60,7 +60,7 @@ PANELS = {
     "3": {
         "key": "3",
         "slug": "panel3",
-        "name": "3 server",
+        "name": os.environ.get("PANEL3_BRAND_NAME", "3 server").strip() or "3 server",
         "setting_key": "panel_3_active",
         "base_url": os.environ.get(
             "PANEL3_BASE_URL",
