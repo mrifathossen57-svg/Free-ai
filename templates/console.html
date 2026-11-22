@@ -9,7 +9,7 @@
     <h1 class="text-2xl font-bold">Live Console</h1>
     <p class="text-xs text-gray-400">
       {% if is_voltx_on %}
-        Global live feed of recent hits (Auto-refresh every 30s)
+        Global live feed of recent hits across active servers (Auto-refresh every 30s)
       {% else %}
         {{ panel_name }} is currently turned OFF by Admin
       {% endif %}
@@ -18,6 +18,19 @@
 
   <div class="flex items-center gap-2 flex-wrap">
     {% if is_voltx_on %}
+      <select
+        id="server-filter-select"
+        onchange="renderFilteredHits()"
+        class="px-3 py-1.5 rounded-xl bg-[#121614] border border-[#242e28] text-xs text-gray-200 focus:outline-none focus:border-emerald-600"
+      >
+        <option value="all">All Servers</option>
+        <option value="1">1 server</option>
+        <option value="2">2 server</option>
+        <option value="3">3 server</option>
+        <option value="4">4 server</option>
+        <option value="5">5 server</option>
+      </select>
+
       <button
         type="button"
         id="toggle-service-search"
@@ -45,6 +58,14 @@
           ✕
         </button>
       </div>
+
+      <button
+        type="button"
+        onclick="loadConsole()"
+        class="px-3 py-1.5 rounded-xl bg-[#141916] hover:bg-[#1c231f] border border-[#242e28] text-xs text-gray-200 font-semibold transition"
+      >
+        Refresh
+      </button>
 
       <span class="px-3 py-1 rounded-full bg-emerald-950 border border-emerald-700/50 text-emerald-400 text-xs font-semibold">● LIVE</span>
     {% else %}
@@ -115,7 +136,7 @@
   ];
 
   function resolveServiceName(h) {
-    const rawSid = String(h.sid ?? h.service ?? h.service_name ?? "").trim();
+    const rawSid = String(h.sid ?? h.service ?? h.service_name ?? h.sender ?? "").trim();
     if (rawSid && rawSid.toUpperCase() !== "SERVICE") {
       return rawSid;
     }
@@ -135,29 +156,18 @@
     return rawSid || "SERVICE";
   }
 
-  function getRawTimeValue(h) {
-    return (
-      h.time ??
-      h.timestamp ??
-      h.created_at ??
-      h.createdAt ??
-      h.ts ??
-      h.date ??
-      ""
-    );
-  }
-
-  function getHitTimestamp(h) {
-    const rawTime = getRawTimeValue(h);
-    if (rawTime === null || rawTime === undefined || rawTime === "") {
+  function parseToMs(val) {
+    if (val === null || val === undefined || val === "") {
       return 0;
     }
 
-    if (typeof rawTime === "number") {
-      return rawTime < 1e12 ? rawTime * 1000 : rawTime;
+    if (typeof val === "number" && Number.isFinite(val)) {
+      return val < 1e12 ? val * 1000 : val;
     }
 
-    const str = String(rawTime).trim();
+    const str = String(val).trim();
+    if (!str) return 0;
+
     if (/^\d+(\.\d+)?$/.test(str)) {
       const num = Number(str);
       return num < 1e12 ? num * 1000 : num;
@@ -169,39 +179,43 @@
       if (!Number.isNaN(parsedToday)) return parsedToday;
     }
 
-    const parsed = new Date(str).getTime();
+    const utcMatch = str.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(?:\.\d+)?\s*UTC$/i);
+    if (utcMatch) {
+      const parsedUtc = new Date(`${utcMatch[1]}T${utcMatch[2]}Z`).getTime();
+      if (!Number.isNaN(parsedUtc)) return parsedUtc;
+    }
+
+    const normalizedIso = str.includes(" ") && !str.includes("T")
+      ? str.replace(" ", "T")
+      : str;
+    const parsed = new Date(normalizedIso).getTime();
     return Number.isNaN(parsed) ? 0 : parsed;
   }
 
+  function getHitTimestamp(h) {
+    const candidates = [
+      h.ts,
+      h.at_ms,
+      h.timestamp,
+      h.created_at,
+      h.createdAt,
+      h.time,
+      h.date
+    ];
+    for (const c of candidates) {
+      const ms = parseToMs(c);
+      if (ms > 0) return ms;
+    }
+    return 0;
+  }
+
   function formatHitTime(h) {
-    const rawTime = getRawTimeValue(h);
-    if (rawTime === null || rawTime === undefined || rawTime === "") {
-      return "";
+    const ms = getHitTimestamp(h);
+    if (ms > 0) {
+      return new Date(ms).toLocaleTimeString();
     }
-
-    if (typeof rawTime === "string" && /^\d{1,2}:\d{2}(:\d{2})?(\s?(AM|PM))?$/i.test(rawTime.trim())) {
-      return rawTime.trim();
-    }
-
-    let d = null;
-    if (typeof rawTime === "number") {
-      const ms = rawTime < 1e12 ? rawTime * 1000 : rawTime;
-      d = new Date(ms);
-    } else {
-      const str = String(rawTime).trim();
-      if (/^\d+(\.\d+)?$/.test(str)) {
-        const num = Number(str);
-        d = new Date(num < 1e12 ? num * 1000 : num);
-      } else {
-        d = new Date(str);
-      }
-    }
-
-    if (!d || Number.isNaN(d.getTime())) {
-      return typeof rawTime === "string" ? rawTime : "";
-    }
-
-    return d.toLocaleTimeString();
+    const rawTime = h.time ?? h.timestamp ?? h.created_at ?? "";
+    return typeof rawTime === "string" ? rawTime.trim() : "";
   }
 
   function normalizeServerLabel(labelOrKey) {
@@ -322,12 +336,18 @@
   function renderFilteredHits() {
     const box = document.getElementById('console-feed');
     const input = document.getElementById('service-search-input');
+    const serverSel = document.getElementById('server-filter-select');
     if (!box) return;
 
     const query = (input ? input.value : '').trim().toLowerCase();
-    const filteredHits = query
-      ? latestHits.filter(h => resolveServiceName(h).toLowerCase().includes(query))
-      : latestHits;
+    const selectedServer = serverSel ? serverSel.value : 'all';
+
+    const filteredHits = latestHits.filter(h => {
+      const matchesService = !query || resolveServiceName(h).toLowerCase().includes(query);
+      const srv = detectHitServer(h);
+      const matchesServer = selectedServer === 'all' || srv.key === selectedServer;
+      return matchesService && matchesServer;
+    });
 
     if (!filteredHits.length) {
       const emptyMsg = query
@@ -337,14 +357,13 @@
       return;
     }
 
-    // যে সার্ভার থেকেই হিট আসুক না কেন, সর্বশেষ হিট (নতুন সময়) সবার উপরে আসবে
     const sortedHits = [...filteredHits].sort((a, b) => getHitTimestamp(b) - getHitTimestamp(a));
 
     box.innerHTML = sortedHits.map(h => {
       const serviceLabel = resolveServiceName(h);
       const t = formatHitTime(h);
       const srv = detectHitServer(h);
-      const rangeVal = String(h.range ?? '').trim();
+      const rangeVal = String(h.range ?? h.number ?? '').trim();
       const msgVal = String(h.message ?? h.sms ?? h.text ?? '').trim();
       const serverText = `<span class="text-gray-400 font-medium">${escapeHtml(srv.label)}</span>`;
       const useRangeUrl = `/page/get-number?range=${encodeURIComponent(rangeVal)}${srv.key ? `&panel=${encodeURIComponent(srv.key)}&server=${encodeURIComponent(srv.key)}` : ''}`;
@@ -395,7 +414,7 @@
 
   async function loadConsole() {
     try {
-      const res = await fetch('/api/bridge/console');
+      const res = await fetch('/api/bridge/console', { cache: 'no-store' });
       const json = await res.json();
       if (json.voltx_active === false || (json.meta && json.meta.code === 503)) {
         renderPanelOff(json.message || 'This panel has been turned off by Admin.');
