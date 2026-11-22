@@ -17,11 +17,11 @@
       <div class="flex items-center gap-2.5 flex-wrap">
         <h1 class="text-2xl font-bold tracking-tight">Master API Documentation</h1>
         <span class="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-950 text-emerald-400 border border-emerald-700/40">
-          5 Panels • Single Master Endpoint
+          5 Panels • Auto-Routing &amp; User Bot Ready
         </span>
       </div>
       <p class="text-sm text-gray-400 mt-1">
-        One unified Master API across <span class="text-white font-semibold">5 Servers</span>. Send your <code class="text-emerald-300">range</code> with your API key in the <code class="text-emerald-300">mauthapi</code> header (or <code class="text-emerald-300">X-API-Key</code>) — numbers are automatically routed across active servers.
+        One unified Master API across <span class="text-white font-semibold">5 Servers</span>. Send your <code class="text-emerald-300">range</code> with your own user API key in <code class="text-emerald-300">mauthapi</code> or <code class="text-emerald-300">X-API-Key</code> — active servers are checked automatically and numbers/OTPs/balances stay isolated per user.
       </p>
     </div>
 
@@ -44,7 +44,7 @@
       <div class="card rounded-2xl p-3.5 flex items-center justify-between gap-2">
         <div class="min-w-0">
           <div class="text-[11px] text-gray-400 font-mono">Server {{ pk }}</div>
-          <div class="text-sm font-bold text-white truncate">{{ pk }} server</div>
+          <div class="text-sm font-bold text-white truncate">{{ p_info.name }}</div>
         </div>
         {% if p_info.active %}
           <span class="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-950 text-emerald-400 border border-emerald-700/40 shrink-0">ON</span>
@@ -65,7 +65,7 @@
           <div>
             <h2 class="text-lg font-bold">Master Get Number Endpoint</h2>
             <p class="text-xs text-gray-400 mt-0.5">
-              Single endpoint for all 5 servers. Just pass <code class="text-emerald-300">range</code> and get a number automatically.
+              Single endpoint for all 5 servers. Pass <code class="text-emerald-300">range</code> and your personal user API key — it checks active panels (1–5) and returns the first available number.
             </p>
           </div>
           <span class="px-2.5 py-1 rounded-full text-xs font-mono bg-emerald-950 text-emerald-400 border border-emerald-700/40">
@@ -106,10 +106,15 @@ mauthapi: YOUR_USER_API_KEY</pre>
     "code": 200,
     "status": "success"
   },
+  "matched_panel": "2",
+  "matched_panel_name": "2 server",
   "data": {
+    "id": "a1b2c3d4e5f6",
+    "panel": "2",
+    "panel_name": "2 server",
     "range": "26134XXX",
     "full_number": "+447404333228",
-    "server": "2 server"
+    "country": "United Kingdom"
   }
 }</pre>
         </div>
@@ -119,7 +124,7 @@ mauthapi: YOUR_USER_API_KEY</pre>
             <div class="text-xs font-semibold text-gray-400 uppercase mb-1.5">cURL Example</div>
             <pre class="p-3 rounded-xl bg-[#0b0e0c] border border-[#202824] font-mono text-[11px] text-gray-300 overflow-x-auto">curl -X POST "{{ site_base }}/getnum" \
   -H "Content-Type: application/json" \
-  -H "mauthapi: YOUR_API_KEY" \
+  -H "mauthapi: YOUR_USER_API_KEY" \
   -d '{"range":"26134XXX"}'</pre>
           </div>
 
@@ -129,12 +134,88 @@ mauthapi: YOUR_USER_API_KEY</pre>
 
 res = requests.post(
     "{{ site_base }}/getnum",
-    headers={"mauthapi": "YOUR_API_KEY"},
+    headers={"mauthapi": "YOUR_USER_API_KEY"},
     json={"range": "26134XXX"}
 )
 print(res.json())</pre>
           </div>
         </div>
+      </section>
+
+      <!-- OTP & Live Console Endpoints -->
+      <section id="otp-console" class="card rounded-2xl p-5 space-y-4 scroll-mt-6">
+        <div>
+          <h2 class="text-lg font-bold">OTP &amp; Live Console Endpoints</h2>
+          <p class="text-xs text-gray-400 mt-0.5">
+            Fetch allocated numbers, live incoming OTPs, and console hits using your personal user API key.
+          </p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="p-3.5 rounded-xl bg-[#0b0e0c] border border-[#202824] space-y-2">
+            <div class="flex items-center gap-2">
+              <span class="px-2 py-0.5 rounded bg-sky-950 text-sky-300 border border-sky-700/40 font-mono text-xs font-bold">GET</span>
+              <span class="font-mono text-xs text-gray-200">{{ site_base }}/my-numbers</span>
+            </div>
+            <p class="text-xs text-gray-400">Syncs and returns your numbers, OTP messages, expiry timers, and balance.</p>
+          </div>
+
+          <div class="p-3.5 rounded-xl bg-[#0b0e0c] border border-[#202824] space-y-2">
+            <div class="flex items-center gap-2">
+              <span class="px-2 py-0.5 rounded bg-sky-950 text-sky-300 border border-sky-700/40 font-mono text-xs font-bold">GET</span>
+              <span class="font-mono text-xs text-gray-200">{{ site_base }}/console</span>
+            </div>
+            <p class="text-xs text-gray-400">Returns live hits and active ranges across all enabled servers.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- User Bot Starter Template -->
+      <section id="user-bot" class="card rounded-2xl p-5 space-y-3 scroll-mt-6">
+        <div class="flex items-center justify-between gap-2 flex-wrap">
+          <div>
+            <h2 class="text-lg font-bold">Build Your Own Bot with Master API</h2>
+            <p class="text-xs text-gray-400 mt-0.5">
+              Users can plug their own <code class="text-emerald-300">USER_API_KEY</code> into this bot script to request numbers by range across all 5 panels and check OTPs.
+            </p>
+          </div>
+          <button type="button" onclick="copyText('botStarterCode', 'Bot template copied!')"
+                  class="px-3 py-1 rounded-lg bg-[#181f1b] hover:bg-[#222c26] border border-[#2a3630] text-xs font-semibold text-gray-200">
+            Copy Bot Code
+          </button>
+        </div>
+
+        <pre id="botStarterCode" class="p-3.5 rounded-xl bg-[#0b0e0c] border border-[#202824] font-mono text-[11px] text-gray-200 overflow-x-auto">import requests
+from telebot import TeleBot
+
+BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+API_BASE = "{{ site_base }}"
+USER_API_KEY = "YOUR_USER_API_KEY"
+
+bot = TeleBot(BOT_TOKEN)
+HEADERS = {"mauthapi": USER_API_KEY, "Content-Type": "application/json"}
+
+@bot.message_handler(commands=["otp"])
+def otp_cmd(msg):
+    r = requests.get(f"{API_BASE}/my-numbers", headers=HEADERS, timeout=15).json()
+    nums = ((r.get("data") or {}).get("numbers") or [])[:5]
+    if not nums:
+        bot.reply_to(msg, "No numbers found.")
+        return
+    out = "\n\n".join([f"{n.get('full_number')} -> {n.get('otp_message') or 'Waiting...'}" for n in nums])
+    bot.reply_to(msg, out)
+
+@bot.message_handler(func=lambda m: bool(m.text and not m.text.startswith("/")))
+def range_cmd(msg):
+    rng = msg.text.strip()
+    r = requests.post(f"{API_BASE}/getnum", headers=HEADERS, json={"range": rng}, timeout=25).json()
+    if (r.get("meta") or {}).get("code") == 200:
+        d = r.get("data") or {}
+        bot.reply_to(msg, f"Number: {d.get('full_number')}\nServer: {r.get('matched_panel_name', '')}\nRange: {d.get('range', rng)}")
+    else:
+        bot.reply_to(msg, f"Failed: {r.get('message', 'Out of stock')}")
+
+bot.infinity_polling(skip_pending=True)</pre>
       </section>
 
       <!-- Live Playground -->
@@ -143,7 +224,7 @@ print(res.json())</pre>
           <div>
             <h2 class="text-lg font-bold">Master API Playground</h2>
             <p class="text-xs text-gray-400 mt-0.5">
-              Test <code class="text-emerald-300">POST /api/v1/getnum</code> directly with only your API key and <code class="text-emerald-300">range</code>.
+              Test <code class="text-emerald-300">POST /api/v1/getnum</code> directly with your API key and <code class="text-emerald-300">range</code>.
             </p>
           </div>
           <span id="pgStatusBadge" class="self-start sm:self-auto px-2.5 py-1 rounded-full text-xs font-mono bg-[#181f1b] text-gray-300 border border-[#27312c]">
@@ -154,12 +235,14 @@ print(res.json())</pre>
         <div>
           <label class="block text-xs text-gray-400 mb-1.5">API Key (<span class="font-mono text-emerald-300">mauthapi</span>)</label>
           <div class="flex flex-col sm:flex-row gap-2">
-            <input id="pgApiKey" type="text" value="" placeholder="Paste your user API key here..."
+            <input id="pgApiKey" type="text" value="{{ user.api_key_visible if user and user.api_key_visible else '' }}" placeholder="Paste your user API key here..."
                    class="flex-1 px-3.5 py-2.5 rounded-xl bg-[#0b0e0c] border border-[#242e29] font-mono text-xs sm:text-sm text-amber-300 focus:outline-none focus:border-emerald-500" />
-            <a href="{{ url_for('section_page', section_key='profile') }}"
-               class="px-3.5 py-2.5 rounded-xl bg-[#181f1b] hover:bg-[#212a25] border border-[#28332d] text-xs font-semibold text-gray-200 text-center transition">
-              Profile Key
-            </a>
+            {% if user %}
+              <a href="{{ url_for('section_page', section_key='profile') }}"
+                 class="px-3.5 py-2.5 rounded-xl bg-[#181f1b] hover:bg-[#212a25] border border-[#28332d] text-xs font-semibold text-gray-200 text-center transition">
+                Profile Key
+              </a>
+            {% endif %}
           </div>
         </div>
 
@@ -198,6 +281,8 @@ print(res.json())</pre>
       <div class="card rounded-2xl p-4 lg:sticky lg:top-6 space-y-2">
         <div class="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">On this page</div>
         <a href="#master-endpoint" class="block text-xs py-1 text-gray-300 hover:text-emerald-400">Master Endpoint</a>
+        <a href="#otp-console" class="block text-xs py-1 text-gray-300 hover:text-emerald-400">OTP &amp; Console</a>
+        <a href="#user-bot" class="block text-xs py-1 text-gray-300 hover:text-emerald-400">User Bot Template</a>
         <a href="#playground" class="block text-xs py-1 text-gray-300 hover:text-emerald-400">Master Playground</a>
         <div class="pt-2 border-t border-[#222b26] text-[11px] text-gray-400 leading-relaxed">
           Single endpoint <code class="text-emerald-300">/api/v1/getnum</code> checks active servers automatically.
