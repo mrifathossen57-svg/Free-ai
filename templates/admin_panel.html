@@ -38,8 +38,8 @@
       {"key": "1", "title": "1 server", "active": voltx_panel_active},
       {"key": "2", "title": "2 server", "active": panel_2_active if panel_2_active is defined else true},
       {"key": "3", "title": "3 server", "active": panel_3_active if panel_3_active is defined else true},
-      {"key": "4", "title": "ZENEX", "active": panel_4_active if panel_4_active is defined else true},
-      {"key": "5", "title": "ZebraSMS", "active": panel_5_active if panel_5_active is defined else true}
+      {"key": "4", "title": "4 server", "active": panel_4_active if panel_4_active is defined else true},
+      {"key": "5", "title": "5 server", "active": panel_5_active if panel_5_active is defined else true}
     ] %}
 
     {% for p in panels_ui %}
@@ -210,7 +210,7 @@
         <div class="p-3 rounded-xl bg-[#0c0f0d] flex flex-wrap items-center justify-between gap-2">
           <div>
             <span class="font-mono text-white font-semibold">{{ log.number_val }}</span>
-            • Panel: <span class="text-sky-400">Panel {{ log.panel_key or '1' }}</span>
+            • Server: <span class="text-sky-400">{{ log.panel_key or '1' }} server</span>
             • Country: <span class="text-amber-300">{{ log.country }}</span>
             • Service: <span class="text-emerald-400">{{ log.service }}</span>
             • User: {{ log.user_email }}
