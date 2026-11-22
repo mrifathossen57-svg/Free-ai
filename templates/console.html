@@ -72,27 +72,31 @@
     "1": "1 server",
     "2": "2 server",
     "3": "3 server",
-    "4": "ZENEX",
-    "5": "ZebraSMS",
+    "4": "4 server",
+    "5": "5 server",
     "sr 1": "1 server",
     "sr1": "1 server",
     "voltx": "1 server",
     "yehub": "2 server",
     "sl virtual": "3 server",
     "slvirtual": "3 server",
-    "zenex": "ZENEX",
-    "panel4": "ZENEX",
-    "panel_4": "ZENEX",
-    "zebrasms": "ZebraSMS",
-    "zebra sms": "ZebraSMS",
-    "panel5": "ZebraSMS",
-    "panel_5": "ZebraSMS",
+    "zenex": "4 server",
+    "panel4": "4 server",
+    "panel_4": "4 server",
+    "zebrasms": "5 server",
+    "zebra sms": "5 server",
+    "panel5": "5 server",
+    "panel_5": "5 server",
     "1 server": "1 server",
     "2 server": "2 server",
     "3 server": "3 server",
+    "4 server": "4 server",
+    "5 server": "5 server",
     "server 1": "1 server",
     "server 2": "2 server",
-    "server 3": "3 server"
+    "server 3": "3 server",
+    "server 4": "4 server",
+    "server 5": "5 server"
   };
 
   const SERVICE_KEYWORDS = [
@@ -200,6 +204,20 @@
     return d.toLocaleTimeString();
   }
 
+  function normalizeServerLabel(labelOrKey) {
+    const str = String(labelOrKey ?? "").trim();
+    if (!str) return "";
+    const lower = str.toLowerCase();
+    if (SERVER_NAME_MAP[lower]) {
+      return SERVER_NAME_MAP[lower];
+    }
+    const numMatch = lower.match(/\b([12345])\b/);
+    if (numMatch) {
+      return `${numMatch[1]} server`;
+    }
+    return "";
+  }
+
   function resolveServerFromText(text) {
     const raw = String(text ?? "").trim();
     if (!raw) return { key: "", label: "" };
@@ -207,33 +225,20 @@
     const lower = raw.toLowerCase();
     if (SERVER_NAME_MAP[lower]) {
       const label = SERVER_NAME_MAP[lower];
-      const key =
-        label.startsWith("1") ? "1" :
-        label.startsWith("2") ? "2" :
-        label.startsWith("3") ? "3" :
-        label.toLowerCase() === "zenex" ? "4" :
-        label.toLowerCase() === "zebrasms" ? "5" : "";
-      return { key, label };
+      return { key: label.charAt(0), label };
     }
 
     for (const alias of Object.keys(SERVER_NAME_MAP)) {
       if (lower.includes(alias)) {
         const label = SERVER_NAME_MAP[alias];
-        const key =
-          label.startsWith("1") ? "1" :
-          label.startsWith("2") ? "2" :
-          label.startsWith("3") ? "3" :
-          label.toLowerCase() === "zenex" ? "4" :
-          label.toLowerCase() === "zebrasms" ? "5" : "";
-        return { key, label };
+        return { key: label.charAt(0), label };
       }
     }
 
     const numMatch = lower.match(/\b([12345])\b/);
     if (numMatch) {
       const k = numMatch[1];
-      const label = k === "4" ? "ZENEX" : k === "5" ? "ZebraSMS" : `${k} server`;
-      return { key: k, label };
+      return { key: k, label: `${k} server` };
     }
 
     return { key: "", label: "" };
@@ -244,13 +249,9 @@
     const directKey = String(h.panel ?? h.panel_key ?? h.panelKey ?? "").trim();
 
     if (directKey && ["1", "2", "3", "4", "5"].includes(directKey)) {
-      const fallbackLabel =
-        directKey === "4" ? "ZENEX" :
-        directKey === "5" ? "ZebraSMS" :
-        `${directKey} server`;
       return {
         key: directKey,
-        label: directName || fallbackLabel
+        label: normalizeServerLabel(directName) || `${directKey} server`
       };
     }
 
@@ -267,13 +268,13 @@
     if (raw) {
       const parsed = resolveServerFromText(raw);
       if (parsed.label) return parsed;
-      return { key: "", label: raw };
     }
 
     const fromMsg = resolveServerFromText(h.message || "");
     if (fromMsg.label) return fromMsg;
 
-    return { key: "1", label: panelName || "1 server" };
+    const fallbackLabel = normalizeServerLabel(panelName) || "1 server";
+    return { key: fallbackLabel.charAt(0), label: fallbackLabel };
   }
 
   function escapeHtml(str) {
@@ -311,6 +312,7 @@
   }
 
   function copyRange(rangeText, btn) {
+    if (!navigator.clipboard) return;
     navigator.clipboard.writeText(rangeText);
     const old = btn.innerText;
     btn.innerText = 'Copied!';
@@ -335,31 +337,32 @@
       return;
     }
 
-    // সব সার্ভারের হিট সময় অনুযায়ী মিশিয়ে নিচে নিচে দেখানো (নতুনটা আগে)
+    // যে সার্ভার থেকেই হিট আসুক না কেন, সর্বশেষ হিট (নতুন সময়) সবার উপরে আসবে
     const sortedHits = [...filteredHits].sort((a, b) => getHitTimestamp(b) - getHitTimestamp(a));
 
     box.innerHTML = sortedHits.map(h => {
       const serviceLabel = resolveServiceName(h);
       const t = formatHitTime(h);
       const srv = detectHitServer(h);
-      const serverText = srv.label
-        ? `<span class="text-gray-400 font-medium">${escapeHtml(srv.label)}</span>`
-        : '';
-      const useRangeUrl = `/page/get-number?range=${encodeURIComponent(h.range || '')}${srv.key ? `&panel=${encodeURIComponent(srv.key)}&server=${encodeURIComponent(srv.key)}` : ''}`;
+      const rangeVal = String(h.range ?? '').trim();
+      const msgVal = String(h.message ?? h.sms ?? h.text ?? '').trim();
+      const serverText = `<span class="text-gray-400 font-medium">${escapeHtml(srv.label)}</span>`;
+      const useRangeUrl = `/page/get-number?range=${encodeURIComponent(rangeVal)}${srv.key ? `&panel=${encodeURIComponent(srv.key)}&server=${encodeURIComponent(srv.key)}` : ''}`;
+      const safeRangeAttr = escapeHtml(JSON.stringify(rangeVal));
 
       return `
         <div class="card rounded-2xl p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
           <div class="space-y-1">
             <div class="flex items-center gap-2 flex-wrap text-xs">
               <span class="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 font-bold">${escapeHtml(serviceLabel)}</span>
-              <span class="font-mono text-amber-300 font-semibold">${escapeHtml(h.range || '')}</span>
+              <span class="font-mono text-amber-300 font-semibold">${escapeHtml(rangeVal)}</span>
               ${t ? `<span class="text-gray-500">${escapeHtml(t)}</span>` : ''}
               ${serverText}
             </div>
-            <div class="text-sm text-gray-200 break-all">→ ${escapeHtml(h.message || '')}</div>
+            <div class="text-sm text-gray-200 break-all">→ ${msgVal ? escapeHtml(msgVal) : '<span class="text-gray-500 italic">No message content</span>'}</div>
           </div>
           <div class="flex items-center gap-2 shrink-0">
-            <button onclick="copyRange('${escapeHtml(h.range || '')}', this)"
+            <button onclick='copyRange(${safeRangeAttr}, this)'
                     class="px-3 py-1.5 rounded-xl bg-[#1a221e] hover:bg-[#24302a] text-xs text-emerald-300 border border-emerald-800/40">
               Copy Range
             </button>
@@ -380,9 +383,10 @@
       consoleTimer = null;
     }
     if (box) {
+      const safePanel = escapeHtml(normalizeServerLabel(panelName) || "1 server");
       box.innerHTML = `
         <div class="card rounded-2xl p-6 border border-rose-700/40 bg-rose-950/20 space-y-1">
-          <div class="text-base font-bold text-rose-300">${escapeHtml(panelName)} is OFF</div>
+          <div class="text-base font-bold text-rose-300">${safePanel} is OFF</div>
           <div class="text-xs text-gray-400">${escapeHtml(msg)}</div>
         </div>
       `;
