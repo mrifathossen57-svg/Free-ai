@@ -136,6 +136,7 @@ const PANELS_META = {{ p_map | tojson }};
 const PANEL_KEYS_ORDER = ['1', '2', '3', '4', '5'];
 const params = new URLSearchParams(window.location.search);
 const rangeInputEl = document.getElementById('range-input');
+let cachedNumbers = [];
 
 function normalizeServerKey(rawVal) {
   const raw = String(rawVal ?? '').trim().toLowerCase();
@@ -312,18 +313,14 @@ function copyText(txt, btn) {
 }
 
 function showGetnumPanelOff(msgText = 'This server has been turned off by Admin.') {
-  if (PANELS_META[currentPanel]) {
+  if (currentPanel !== 'master' && PANELS_META[currentPanel]) {
     PANELS_META[currentPanel].active = false;
   }
-  const banner = document.getElementById('getnum-off-banner');
-  const formCard = document.getElementById('getnum-form-card');
-  const offTitle = document.getElementById('getnum-off-title');
+  syncPanelUI();
   const offMsg = document.getElementById('getnum-off-msg');
-  const pName = (PANELS_META[currentPanel] && PANELS_META[currentPanel].name) || SERVER_LABELS[currentPanel] || `${currentPanel} server`;
-  if (offTitle) offTitle.innerText = `${pName} is OFF`;
-  if (offMsg) offMsg.innerText = msgText;
-  if (banner) banner.classList.remove('hidden');
-  if (formCard) formCard.classList.add('hidden');
+  if (offMsg && msgText) {
+    offMsg.innerText = msgText;
+  }
 }
 
 async function allocateNumber() {
@@ -416,8 +413,6 @@ async function allocateNumber() {
     btn.innerText = 'Get Number';
   }
 }
-
-let cachedNumbers = [];
 
 async function refreshNumbers() {
   try {
