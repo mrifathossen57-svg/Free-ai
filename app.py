@@ -2312,6 +2312,7 @@ def _filter_liveaccess_5h(payload):
 def _normalize_liveaccess_for_panel(p: dict, raw_json: dict):
     if p["style"] == "sr1":
         return _filter_liveaccess_5h(raw_json)
+
     if p["style"] == "yehub":
         ranges_map = (raw_json or {}).get("ranges") or {}
         services = []
@@ -2319,17 +2320,37 @@ def _normalize_liveaccess_for_panel(p: dict, raw_json: dict):
             clean_ranges = [str(x).split("|")[-1].strip() for x in (rng_list or []) if str(x).strip()]
             services.append({"sid": sid, "ranges": clean_ranges})
         return _filter_liveaccess_5h({"meta": {"code": 200, "status": "success"}, "data": {"services": services}})
+
     if p["style"] == "slvirtual":
         rows = (raw_json or {}).get("data") or []
         by_svc = {}
         for item in rows:
-            sid = str(item.get("service") or item.get("country") or "SERVICE")
-            rng = str(item.get("tag") or item.get("prefix") or "").strip()
+            if not isinstance(item, dict):
+                continue
+            sid = str(item.get("service") or item.get("country") or "SERVICE").strip()
             by_svc.setdefault(sid, [])
-            if rng and rng not in by_svc[sid]:
-                by_svc[sid].append(rng)
-        services = [{"sid": k, "ranges": v} for k, v in by_svc.items()]
+
+            prefix = str(item.get("prefix") or item.get("rangePrefix") or "").strip()
+            tag = str(item.get("tag") or "").strip()
+            tags_list = item.get("tags") if isinstance(item.get("tags"), list) else []
+
+            candidates = []
+            if prefix:
+                candidates.append(f"{prefix}XXX" if not prefix.upper().endswith("XXX") else prefix)
+            if tag:
+                candidates.append(tag)
+            for t in tags_list:
+                t_clean = str(t or "").strip()
+                if t_clean:
+                    candidates.append(t_clean)
+
+            for c in candidates:
+                if c and c not in by_svc[sid]:
+                    by_svc[sid].append(c)
+
+        services = [{"sid": k, "ranges": v} for k, v in by_svc.items() if v]
         return _filter_liveaccess_5h({"meta": {"code": 200, "status": "success"}, "data": {"services": services}})
+
     if p["style"] == "zenex":
         mp = p.get("mapping") or {}
         raw_list = _extract_nested(raw_json or {}, mp.get("list_key") or "data.active_ranges") or []
@@ -2344,6 +2365,7 @@ def _normalize_liveaccess_for_panel(p: dict, raw_json: dict):
                 by_svc[sid].append(rng)
         services = [{"sid": k, "ranges": v} for k, v in by_svc.items()]
         return _filter_liveaccess_5h({"meta": {"code": 200, "status": "success"}, "data": {"services": services}})
+
     if p["style"] == "zebrasms":
         rows = ((raw_json or {}).get("data") or {}).get("rows") or []
         services = []
@@ -2355,6 +2377,7 @@ def _normalize_liveaccess_for_panel(p: dict, raw_json: dict):
             if rng_list:
                 services.append({"sid": sid, "ranges": rng_list})
         return _filter_liveaccess_5h({"meta": {"code": 200, "status": "success"}, "data": {"services": services}})
+
     return _filter_liveaccess_5h(raw_json)
 
 
@@ -2575,7 +2598,6 @@ def bridge_console(user):
         "errors": errors,
         "data": {"hits": combined_hits},
     })
-
 
 
 @app.route("/api/bridge/liveaccess")
