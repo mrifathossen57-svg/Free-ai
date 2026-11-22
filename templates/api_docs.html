@@ -4,61 +4,146 @@
 {% set site_base = base_path if base_path else (request.host_url.rstrip('/') ~ '/api/v1') %}
 {% set p_map = panels_status if panels_status is defined else {
   "1": {"key": "1", "name": "1 server", "active": voltx_panel_active if voltx_panel_active is defined else true},
-  "2": {"key": "2", "name": "2 server", "active": true},
-  "3": {"key": "3", "name": "3 server", "active": true}
+  "2": {"key": "2", "name": "2 server", "active": panel_2_active if panel_2_active is defined else true},
+  "3": {"key": "3", "name": "3 server", "active": panel_3_active if panel_3_active is defined else true},
+  "4": {"key": "4", "name": "4 server", "active": panel_4_active if panel_4_active is defined else true},
+  "5": {"key": "5", "name": "5 server", "active": panel_5_active if panel_5_active is defined else true}
 } %}
 
 <div class="max-w-6xl space-y-6">
-  <!-- Top Title & Base Path -->
+  <!-- Top Title & Master Base Path -->
   <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
     <div>
-      <h1 class="text-2xl font-bold tracking-tight">API Documentation</h1>
+      <div class="flex items-center gap-2.5 flex-wrap">
+        <h1 class="text-2xl font-bold tracking-tight">Master API Documentation</h1>
+        <span class="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-950 text-emerald-400 border border-emerald-700/40">
+          5 Panels • Single Master Endpoint
+        </span>
+      </div>
       <p class="text-sm text-gray-400 mt-1">
-        Public API endpoint reference across <span class="text-white font-semibold">3 Panels</span>. Authenticate requests with your user API key in the <code class="text-emerald-300">mauthapi</code> header (or <code class="text-emerald-300">X-API-Key</code>).
+        One unified Master API across <span class="text-white font-semibold">5 Servers</span>. Send your <code class="text-emerald-300">range</code> with your API key in the <code class="text-emerald-300">mauthapi</code> header (or <code class="text-emerald-300">X-API-Key</code>) — numbers are automatically routed across active servers.
       </p>
     </div>
 
     <div class="card rounded-2xl p-3.5 flex items-center gap-3 min-w-0">
       <div class="min-w-0">
-        <div class="text-[11px] uppercase tracking-wider text-gray-400">Base path</div>
+        <div class="text-[11px] uppercase tracking-wider text-gray-400">Master Base URL</div>
         <div id="basePathText" class="text-xs sm:text-sm font-mono text-emerald-400 truncate">{{ site_base }}</div>
       </div>
-      <button type="button" onclick="copyText('basePathText', 'Base path copied!')"
+      <button type="button" onclick="copyText('basePathText', 'Master base URL copied!')"
               class="shrink-0 px-3 py-1.5 rounded-xl bg-[#181f1b] hover:bg-[#222c26] border border-[#2a3630] text-xs font-semibold text-gray-200 transition">
         Copy
       </button>
     </div>
   </div>
 
-  <!-- Active Panels Status Strip -->
-  <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-    {% for pk in ["1", "2", "3"] %}
+  <!-- 5 Panels Status Strip -->
+  <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+    {% for pk in ["1", "2", "3", "4", "5"] %}
       {% set p_info = p_map.get(pk, {"key": pk, "name": pk ~ " server", "active": true}) %}
-      <div class="card rounded-2xl p-3.5 flex items-center justify-between">
-        <div>
-          <div class="text-xs text-gray-400 font-mono">Panel {{ pk }}</div>
-          <div class="text-sm font-bold text-white">{{ p_info.name }}</div>
+      <div class="card rounded-2xl p-3.5 flex items-center justify-between gap-2">
+        <div class="min-w-0">
+          <div class="text-[11px] text-gray-400 font-mono">Server {{ pk }}</div>
+          <div class="text-sm font-bold text-white truncate">{{ pk }} server</div>
         </div>
         {% if p_info.active %}
-          <span class="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-950 text-emerald-400 border border-emerald-700/40">ON</span>
+          <span class="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-950 text-emerald-400 border border-emerald-700/40 shrink-0">ON</span>
         {% else %}
-          <span class="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-rose-950 text-rose-400 border border-rose-700/40">OFF</span>
+          <span class="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-rose-950 text-rose-400 border border-rose-700/40 shrink-0">OFF</span>
         {% endif %}
       </div>
     {% endfor %}
   </div>
 
-  <!-- On this page + Main Docs Grid -->
+  <!-- Main Grid -->
   <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-    <!-- Left / Main Column -->
     <div class="lg:col-span-9 space-y-6">
-      <!-- Playground -->
+
+      <!-- Single Master Endpoint Card -->
+      <section id="master-endpoint" class="card rounded-2xl p-5 space-y-4 scroll-mt-6">
+        <div class="flex items-center justify-between gap-2 flex-wrap">
+          <div>
+            <h2 class="text-lg font-bold">Master Get Number Endpoint</h2>
+            <p class="text-xs text-gray-400 mt-0.5">
+              Single endpoint for all 5 servers. Just pass <code class="text-emerald-300">range</code> and get a number automatically.
+            </p>
+          </div>
+          <span class="px-2.5 py-1 rounded-full text-xs font-mono bg-emerald-950 text-emerald-400 border border-emerald-700/40">
+            Auto-Route (1–5)
+          </span>
+        </div>
+
+        <div class="flex items-center justify-between gap-2 flex-wrap p-3 rounded-xl bg-[#0b0e0c] border border-[#222b26]">
+          <div class="flex items-center gap-2 min-w-0">
+            <span class="px-2 py-0.5 rounded-md bg-emerald-950 text-emerald-400 border border-emerald-700/40 font-mono text-xs font-bold">POST</span>
+            <span id="masterEndpointUrl" class="font-mono text-xs sm:text-sm text-gray-100 break-all">{{ site_base }}/getnum</span>
+          </div>
+          <button type="button" onclick="copyText('masterEndpointUrl', 'Master endpoint copied!')"
+                  class="px-3 py-1 rounded-lg bg-[#181f1b] hover:bg-[#222c26] border border-[#2a3630] text-xs font-semibold text-gray-200">
+            Copy
+          </button>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <div class="text-xs font-semibold text-gray-400 uppercase mb-1.5">Request Headers</div>
+            <pre class="p-3 rounded-xl bg-[#0b0e0c] border border-[#202824] font-mono text-xs text-sky-300 overflow-x-auto">Content-Type: application/json
+mauthapi: YOUR_USER_API_KEY</pre>
+          </div>
+
+          <div>
+            <div class="text-xs font-semibold text-gray-400 uppercase mb-1.5">Request Body (JSON)</div>
+            <pre class="p-3 rounded-xl bg-[#0b0e0c] border border-[#202824] font-mono text-xs text-emerald-300 overflow-x-auto">{
+  "range": "26134XXX"
+}</pre>
+          </div>
+        </div>
+
+        <div>
+          <div class="text-xs font-semibold text-gray-400 uppercase mb-1.5">Success Response</div>
+          <pre class="p-3 rounded-xl bg-[#0b0e0c] border border-[#202824] font-mono text-xs text-gray-200 overflow-x-auto">{
+  "meta": {
+    "code": 200,
+    "status": "success"
+  },
+  "data": {
+    "range": "26134XXX",
+    "full_number": "+447404333228",
+    "server": "2 server"
+  }
+}</pre>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+          <div>
+            <div class="text-xs font-semibold text-gray-400 uppercase mb-1.5">cURL Example</div>
+            <pre class="p-3 rounded-xl bg-[#0b0e0c] border border-[#202824] font-mono text-[11px] text-gray-300 overflow-x-auto">curl -X POST "{{ site_base }}/getnum" \
+  -H "Content-Type: application/json" \
+  -H "mauthapi: YOUR_API_KEY" \
+  -d '{"range":"26134XXX"}'</pre>
+          </div>
+
+          <div>
+            <div class="text-xs font-semibold text-gray-400 uppercase mb-1.5">Python Example</div>
+            <pre class="p-3 rounded-xl bg-[#0b0e0c] border border-[#202824] font-mono text-[11px] text-gray-300 overflow-x-auto">import requests
+
+res = requests.post(
+    "{{ site_base }}/getnum",
+    headers={"mauthapi": "YOUR_API_KEY"},
+    json={"range": "26134XXX"}
+)
+print(res.json())</pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- Live Playground -->
       <section id="playground" class="card rounded-2xl p-5 space-y-4 scroll-mt-6">
         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <div>
-            <h2 class="text-lg font-bold">Playground</h2>
+            <h2 class="text-lg font-bold">Master API Playground</h2>
             <p class="text-xs text-gray-400 mt-0.5">
-              Test the API endpoints live. Select a panel (<code class="text-emerald-300">panel=1</code>, <code class="text-emerald-300">2</code>, or <code class="text-emerald-300">3</code>) and paste your active user API key.
+              Test <code class="text-emerald-300">POST /api/v1/getnum</code> directly with only your API key and <code class="text-emerald-300">range</code>.
             </p>
           </div>
           <span id="pgStatusBadge" class="self-start sm:self-auto px-2.5 py-1 rounded-full text-xs font-mono bg-[#181f1b] text-gray-300 border border-[#27312c]">
@@ -79,32 +164,19 @@
         </div>
 
         <div class="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-center">
-          <select id="pgPanel" onchange="onEndpointChange()"
-                  class="sm:col-span-3 px-3 py-2.5 rounded-xl bg-[#0b0e0c] border border-[#242e29] font-mono text-xs sm:text-sm text-emerald-300 focus:outline-none focus:border-emerald-500">
-            {% for pk in ["1", "2", "3"] %}
-              {% set p_info = p_map.get(pk, {"key": pk, "name": pk ~ " server", "active": true}) %}
-              <option value="{{ pk }}">{{ p_info.name }} ({{ 'ON' if p_info.active else 'OFF' }})</option>
-            {% endfor %}
-          </select>
-
-          <select id="pgEndpoint" onchange="onEndpointChange()"
-                  class="sm:col-span-6 px-3.5 py-2.5 rounded-xl bg-[#0b0e0c] border border-[#242e29] font-mono text-xs sm:text-sm text-gray-100 focus:outline-none focus:border-emerald-500">
-            <option value="POST_GETNUM">POST /api/v1/getnum</option>
-            <option value="GET_LIVEACCESS">GET /api/v1/liveaccess</option>
-            <option value="GET_MY_NUMBERS">GET /api/v1/my-numbers</option>
-            <option value="GET_CONSOLE">GET /api/v1/console</option>
-          </select>
-
-          <button type="button" onclick="runPlayground()" id="pgRunBtn"
+          <div class="sm:col-span-9 px-3.5 py-2.5 rounded-xl bg-[#0b0e0c] border border-[#242e29] font-mono text-xs sm:text-sm text-emerald-300 truncate">
+            POST {{ site_base }}/getnum
+          </div>
+          <button type="button" onclick="runMasterPlayground()" id="pgRunBtn"
                   class="sm:col-span-3 px-4 py-2.5 rounded-xl accent-btn text-white font-semibold text-sm transition">
-            Run
+            Run Master API
           </button>
         </div>
 
-        <div id="pgBodyWrap">
+        <div>
           <label class="block text-xs text-gray-400 mb-1.5">Request Body (JSON)</label>
           <textarea id="pgRequestBody" rows="2"
-                    class="w-full px-3.5 py-2.5 rounded-xl bg-[#0b0e0c] border border-[#242e29] font-mono text-xs text-emerald-300 focus:outline-none focus:border-emerald-500">{ "range": "26134XXX", "panel": "1" }</textarea>
+                    class="w-full px-3.5 py-2.5 rounded-xl bg-[#0b0e0c] border border-[#242e29] font-mono text-xs text-emerald-300 focus:outline-none focus:border-emerald-500">{ "range": "26134XXX" }</textarea>
         </div>
 
         <div>
@@ -115,123 +187,20 @@
           </div>
           <pre id="pgResponseBox" class="p-3.5 rounded-xl bg-[#0b0e0c] border border-[#202824] font-mono text-xs text-gray-200 overflow-x-auto max-h-72">{
   "ok": true,
-  "message": "Click Run to execute request."
+  "message": "Enter your API key and range, then click Run Master API."
 }</pre>
-        </div>
-      </section>
-
-      <!-- Public API Endpoints -->
-      <section id="public-api" class="space-y-4 scroll-mt-6">
-        <div class="card rounded-2xl p-5">
-          <h2 class="text-lg font-bold">API Endpoints</h2>
-          <p class="text-xs sm:text-sm text-gray-400 mt-1.5 leading-relaxed">
-            Pass <code class="text-emerald-300">panel=1</code> (1 server), <code class="text-emerald-300">panel=2</code> (2 server), or <code class="text-emerald-300">panel=3</code> (3 server) via query string or JSON body. If a panel is turned OFF by Admin, the endpoint returns HTTP <code class="text-rose-300">503</code> while other active panels continue working.
-          </p>
-        </div>
-
-        <!-- 1. POST /api/v1/getnum -->
-        <div id="ep-getnum" class="card rounded-2xl p-5 space-y-3.5 scroll-mt-6">
-          <div class="flex items-center justify-between gap-2 flex-wrap">
-            <div class="flex items-center gap-2 min-w-0">
-              <span class="px-2 py-0.5 rounded-md bg-emerald-950 text-emerald-400 border border-emerald-700/40 font-mono text-xs font-bold">POST</span>
-              <span id="url-getnum" class="font-mono text-xs sm:text-sm text-gray-100 break-all">{{ site_base }}/getnum</span>
-            </div>
-            <button type="button" onclick="copyText('url-getnum', 'Endpoint URL copied!')"
-                    class="px-3 py-1 rounded-lg bg-[#181f1b] hover:bg-[#222c26] border border-[#2a3630] text-xs font-semibold text-gray-200">
-              Copy
-            </button>
-          </div>
-          <p class="text-sm text-gray-300">Allocate one number from a range on the selected panel.</p>
-
-          <div>
-            <div class="text-xs font-semibold text-gray-400 uppercase mb-1">Request body</div>
-            <pre class="p-3 rounded-xl bg-[#0b0e0c] border border-[#202824] font-mono text-xs text-emerald-300 overflow-x-auto">{ "range": "26134XXX", "panel": "2" }</pre>
-          </div>
-
-          <div>
-            <div class="text-xs font-semibold text-gray-400 uppercase mb-1">Response</div>
-            <pre class="p-3 rounded-xl bg-[#0b0e0c] border border-[#202824] font-mono text-xs text-gray-200 overflow-x-auto">{ "meta": { "code": 200, "status": "success" }, "data": { "panel": "2", "panel_name": "2 server", "full_number": "+447404333228" } }</pre>
-          </div>
-
-          <ul class="text-xs text-gray-400 space-y-1 list-disc pl-4">
-            <li>Header: <code class="text-gray-200">mauthapi: &lt;your_user_api_key&gt;</code></li>
-            <li>Optional <code class="text-gray-200">panel</code> values: <code class="text-gray-200">"1"</code> (1 server), <code class="text-gray-200">"2"</code> (2 server), <code class="text-gray-200">"3"</code> (3 server).</li>
-          </ul>
-        </div>
-
-        <!-- 2. GET /api/v1/liveaccess -->
-        <div id="ep-liveaccess" class="card rounded-2xl p-5 space-y-3.5 scroll-mt-6">
-          <div class="flex items-center justify-between gap-2 flex-wrap">
-            <div class="flex items-center gap-2 min-w-0">
-              <span class="px-2 py-0.5 rounded-md bg-cyan-950 text-cyan-300 border border-cyan-700/40 font-mono text-xs font-bold">GET</span>
-              <span id="url-liveaccess" class="font-mono text-xs sm:text-sm text-gray-100 break-all">{{ site_base }}/liveaccess?panel=2</span>
-            </div>
-            <button type="button" onclick="copyText('url-liveaccess', 'Endpoint URL copied!')"
-                    class="px-3 py-1 rounded-lg bg-[#181f1b] hover:bg-[#222c26] border border-[#2a3630] text-xs font-semibold text-gray-200">
-              Copy
-            </button>
-          </div>
-          <p class="text-sm text-gray-300">Recently-active services and live access ranges for the chosen panel.</p>
-
-          <div>
-            <div class="text-xs font-semibold text-gray-400 uppercase mb-1">Response</div>
-            <pre class="p-3 rounded-xl bg-[#0b0e0c] border border-[#202824] font-mono text-xs text-gray-200 overflow-x-auto">{ "meta": { "code": 200, "status": "ok" }, "data": { "services": [] } }</pre>
-          </div>
-        </div>
-
-        <!-- 3. GET /api/v1/my-numbers -->
-        <div id="ep-my-numbers" class="card rounded-2xl p-5 space-y-3.5 scroll-mt-6">
-          <div class="flex items-center justify-between gap-2 flex-wrap">
-            <div class="flex items-center gap-2 min-w-0">
-              <span class="px-2 py-0.5 rounded-md bg-cyan-950 text-cyan-300 border border-cyan-700/40 font-mono text-xs font-bold">GET</span>
-              <span id="url-my-numbers" class="font-mono text-xs sm:text-sm text-gray-100 break-all">{{ site_base }}/my-numbers</span>
-            </div>
-            <button type="button" onclick="copyText('url-my-numbers', 'Endpoint URL copied!')"
-                    class="px-3 py-1 rounded-lg bg-[#181f1b] hover:bg-[#222c26] border border-[#2a3630] text-xs font-semibold text-gray-200">
-              Copy
-            </button>
-          </div>
-          <p class="text-sm text-gray-300">Your allocated numbers (optionally filtered by <code class="text-emerald-300">?panel=2</code>), received OTPs, and current balance.</p>
-
-          <div>
-            <div class="text-xs font-semibold text-gray-400 uppercase mb-1">Response</div>
-            <pre class="p-3 rounded-xl bg-[#0b0e0c] border border-[#202824] font-mono text-xs text-gray-200 overflow-x-auto">{ "meta": { "code": 200, "status": "success" }, "data": { "numbers": [], "balance": 0.0 } }</pre>
-          </div>
-        </div>
-
-        <!-- 4. GET /api/v1/console -->
-        <div id="ep-console" class="card rounded-2xl p-5 space-y-3.5 scroll-mt-6">
-          <div class="flex items-center justify-between gap-2 flex-wrap">
-            <div class="flex items-center gap-2 min-w-0">
-              <span class="px-2 py-0.5 rounded-md bg-cyan-950 text-cyan-300 border border-cyan-700/40 font-mono text-xs font-bold">GET</span>
-              <span id="url-console" class="font-mono text-xs sm:text-sm text-gray-100 break-all">{{ site_base }}/console?panel=2</span>
-            </div>
-            <button type="button" onclick="copyText('url-console', 'Endpoint URL copied!')"
-                    class="px-3 py-1 rounded-lg bg-[#181f1b] hover:bg-[#222c26] border border-[#2a3630] text-xs font-semibold text-gray-200">
-              Copy
-            </button>
-          </div>
-          <p class="text-sm text-gray-300">Recent OTP hit logs for your account on the selected panel.</p>
-
-          <div>
-            <div class="text-xs font-semibold text-gray-400 uppercase mb-1">Response</div>
-            <pre class="p-3 rounded-xl bg-[#0b0e0c] border border-[#202824] font-mono text-xs text-gray-200 overflow-x-auto">{ "meta": { "code": 200, "status": "success" }, "data": { "hits": [] } }</pre>
-          </div>
         </div>
       </section>
     </div>
 
-    <!-- Right TOC: On this page -->
+    <!-- Right TOC -->
     <aside class="lg:col-span-3">
       <div class="card rounded-2xl p-4 lg:sticky lg:top-6 space-y-2">
         <div class="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">On this page</div>
-        <a href="#playground" class="block text-xs py-1 text-gray-300 hover:text-emerald-400">Playground</a>
-        <a href="#public-api" class="block text-xs py-1 text-gray-300 hover:text-emerald-400">API Endpoints</a>
-        <div class="pl-3 space-y-1 border-l border-[#222b26] mt-1">
-          <a href="#ep-getnum" class="block text-xs py-0.5 text-gray-400 hover:text-emerald-400">POST /getnum</a>
-          <a href="#ep-liveaccess" class="block text-xs py-0.5 text-gray-400 hover:text-emerald-400">GET /liveaccess</a>
-          <a href="#ep-my-numbers" class="block text-xs py-0.5 text-gray-400 hover:text-emerald-400">GET /my-numbers</a>
-          <a href="#ep-console" class="block text-xs py-0.5 text-gray-400 hover:text-emerald-400">GET /console</a>
+        <a href="#master-endpoint" class="block text-xs py-1 text-gray-300 hover:text-emerald-400">Master Endpoint</a>
+        <a href="#playground" class="block text-xs py-1 text-gray-300 hover:text-emerald-400">Master Playground</a>
+        <div class="pt-2 border-t border-[#222b26] text-[11px] text-gray-400 leading-relaxed">
+          Single endpoint <code class="text-emerald-300">/api/v1/getnum</code> checks active servers automatically.
         </div>
       </div>
     </aside>
@@ -257,28 +226,9 @@
     navigator.clipboard?.writeText(text).then(() => showToast(toastMsg)).catch(() => showToast("Copy failed"));
   }
 
-  function onEndpointChange() {
-    const ep = document.getElementById("pgEndpoint").value;
-    const panelKey = document.getElementById("pgPanel").value;
-    const bodyWrap = document.getElementById("pgBodyWrap");
-    const bodyArea = document.getElementById("pgRequestBody");
-
-    if (ep === "POST_GETNUM") {
-      bodyWrap.classList.remove("hidden");
-      try {
-        const cur = JSON.parse(bodyArea.value || "{}");
-        cur.panel = panelKey;
-        bodyArea.value = JSON.stringify(cur);
-      } catch (_) {}
-    } else {
-      bodyWrap.classList.add("hidden");
-    }
-  }
-
-  async function runPlayground() {
-    const ep = document.getElementById("pgEndpoint").value;
-    const panelKey = document.getElementById("pgPanel").value;
+  async function runMasterPlayground() {
     const apiKey = document.getElementById("pgApiKey").value.trim();
+    const bodyText = document.getElementById("pgRequestBody").value.trim();
     const badge = document.getElementById("pgStatusBadge");
     const box = document.getElementById("pgResponseBox");
     const btn = document.getElementById("pgRunBtn");
@@ -287,28 +237,14 @@
     badge.textContent = "Running...";
 
     try {
-      let url = "";
-      let options = {
-        method: "GET",
+      const res = await fetch("/api/v1/getnum", {
+        method: "POST",
         headers: {
           "Content-Type": "application/json",
           "mauthapi": apiKey
-        }
-      };
-
-      if (ep === "POST_GETNUM") {
-        url = `/api/v1/getnum?panel=${encodeURIComponent(panelKey)}`;
-        options.method = "POST";
-        options.body = document.getElementById("pgRequestBody").value;
-      } else if (ep === "GET_LIVEACCESS") {
-        url = `/api/v1/liveaccess?panel=${encodeURIComponent(panelKey)}`;
-      } else if (ep === "GET_MY_NUMBERS") {
-        url = `/api/v1/my-numbers?panel=${encodeURIComponent(panelKey)}`;
-      } else if (ep === "GET_CONSOLE") {
-        url = `/api/v1/console?panel=${encodeURIComponent(panelKey)}`;
-      }
-
-      const res = await fetch(url, options);
+        },
+        body: bodyText
+      });
       const data = await res.json();
       badge.textContent = `HTTP ${res.status}`;
       box.textContent = JSON.stringify(data, null, 2);
@@ -322,7 +258,5 @@
       btn.disabled = false;
     }
   }
-
-  onEndpointChange();
 </script>
 {% endblock %}
