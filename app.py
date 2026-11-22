@@ -71,6 +71,45 @@ PANELS = {
         "auth_header": "x-api-key",
         "style": "slvirtual",
     },
+    "4": {
+        "key": "4",
+        "slug": "panel4",
+        "name": "ZENEX",
+        "command": "/ZENEX",
+        "setting_key": "panel_4_active",
+        "base_url": os.environ.get(
+            "PANEL4_BASE_URL",
+            "https://api.zenexnetwork.com"
+        ).rstrip("/"),
+        "api_key_env": "PANEL4_API_KEY",
+        "fallback_key_env": "",
+        "default_api_key": "ZNX_4MXS5N5JVJTLLDJY7GM87EKL",
+        "auth_header": "mapikey",
+        "endpoint": "/v1/active-ranges",
+        "number_endpoint": "",
+        "mapping": {
+            "list_key": "data.active_ranges",
+            "range": "range",
+            "service": "service",
+            "time": "created_at",
+        },
+        "style": "zenex",
+    },
+    "5": {
+        "key": "5",
+        "slug": "panel5",
+        "name": "ZebraSMS",
+        "setting_key": "panel_5_active",
+        "base_url": os.environ.get(
+            "PANEL5_BASE_URL",
+            "https://api.zebrasms.com/api/v1"
+        ).rstrip("/"),
+        "api_key_env": "PANEL5_API_KEY",
+        "fallback_key_env": "",
+        "default_api_key": "",
+        "auth_header": "MAuth",
+        "style": "zebrasms",
+    },
 }
 
 
@@ -525,9 +564,8 @@ def init_db():
     """)
 
     cur.execute("INSERT OR IGNORE INTO settings (k, v) VALUES ('agent_mail_auto_account', '1')")
-    cur.execute("INSERT OR IGNORE INTO settings (k, v) VALUES ('voltx_panel_active', '1')")
-    cur.execute("INSERT OR IGNORE INTO settings (k, v) VALUES ('panel_2_active', '1')")
-    cur.execute("INSERT OR IGNORE INTO settings (k, v) VALUES ('panel_3_active', '1')")
+    for p in PANELS.values():
+        cur.execute("INSERT OR IGNORE INTO settings (k, v) VALUES (?, '1')", (p["setting_key"],))
 
     for c, r in DEFAULT_COUNTRY_RATES.items():
         cur.execute("INSERT OR IGNORE INTO country_rates (country, rate) VALUES (?, ?)", (c, r))
@@ -568,7 +606,15 @@ def resolve_panel(raw_panel=None) -> dict:
     if val in PANELS:
         return PANELS[val]
     for p in PANELS.values():
-        if val in (p["slug"].lower(), p["name"].lower(), f"panel{p['key']}", f"panel_{p['key']}"):
+        aliases = [
+            p["slug"].lower(),
+            p["name"].lower(),
+            f"panel{p['key']}",
+            f"panel_{p['key']}",
+        ]
+        if p.get("command"):
+            aliases.append(p["command"].lstrip("/").lower())
+        if val in aliases:
             return p
     return PANELS["1"]
 
@@ -739,6 +785,8 @@ def get_api_token(panel_key: str = "1") -> str:
     token = os.environ.get(p["api_key_env"], "").strip()
     if not token and p.get("fallback_key_env"):
         token = os.environ.get(p["fallback_key_env"], "").strip()
+    if not token and p.get("default_api_key"):
+        token = str(p["default_api_key"]).strip()
     return token
 
 
@@ -749,6 +797,18 @@ def upstream_headers(token: str = None, panel_key: str = "1") -> dict:
         p["auth_header"]: api_key,
         "Content-Type": "application/json",
     }
+
+
+def _extract_nested(obj: dict, path_str: str):
+    cur = obj
+    for part in (path_str or "").split("."):
+        if not part:
+            continue
+        if isinstance(cur, dict):
+            cur = cur.get(part)
+        else:
+            return None
+    return cur
 
 
 def calculate_rate(country: str, service_sid: str = "", agent_email: str = "") -> float:
@@ -888,6 +948,8 @@ def public_api_key_required(f):
             or request.headers.get("x-api-key")
             or request.headers.get("authkey")
             or request.headers.get("mauthapi")
+            or request.headers.get("mapikey")
+            or request.headers.get("MAuth")
             or request.args.get("api_key")
             or ((request.get_json(silent=True) or {}).get("api_key") if request.is_json else "")
             or ""
@@ -896,7 +958,7 @@ def public_api_key_required(f):
         if not supplied_key:
             return jsonify({
                 "meta": {"code": 401, "status": "unauthorized"},
-                "message": "API key is missing. Pass x-api-key / authkey / mauthapi header."
+                "message": "API key is missing. Pass x-api-key / authkey / mauthapi / mapikey / MAuth header."
             }), 401
 
         conn = get_db()
@@ -1381,6 +1443,8 @@ def admin_panel():
         voltx_panel_active=panels_status["1"]["active"],
         panel_2_active=panels_status["2"]["active"],
         panel_3_active=panels_status["3"]["active"],
+        panel_4_active=panels_status["4"]["active"],
+        panel_5_active=panels_status["5"]["active"],
         panels_status=panels_status,
         panel_brand_name=PANEL_BRAND_NAME,
         country_rates=get_country_rates(),
@@ -1607,8 +1671,10 @@ def _create_number_for_user(user_dict: dict, raw_range: str, panel_key: str = "1
         return {"ok": False, "message": f"{p['name']} API key is not configured in environment ({p['api_key_env']})."}
 
     clean_rid = str(raw_range or "").upper().replace("X", "").replace("+", "").strip()
-    if not clean_rid and p["style"] != "slvirtual":
+    if not clean_rid and p["style"] not in ("slvirtual", "zebrasms"):
         return {"ok": False, "message": "Please enter a valid range."}
+
+    expires_ts = None
 
     try:
         if p["style"] == "sr1":
@@ -1645,7 +1711,7 @@ def _create_number_for_user(user_dict: dict, raw_range: str, panel_key: str = "1
             country = data.get("country", "Default")
             operator = data.get("operator", "")
 
-        else:  # slvirtual
+        elif p["style"] == "slvirtual":
             payload_body = {}
             if clean_rid:
                 payload_body["rangePrefix"] = clean_rid
@@ -1666,10 +1732,68 @@ def _create_number_for_user(user_dict: dict, raw_range: str, panel_key: str = "1
             country = data.get("country", "Default")
             operator = data.get("tag", "")
 
+        elif p["style"] == "zebrasms":
+            req_range = str(raw_range or "").strip()
+            if not req_range and clean_rid:
+                req_range = f"{clean_rid}XXX"
+            payload_body = {"range": req_range} if req_range else {}
+            r = requests.post(
+                f"{p['base_url']}/publicapi/getnum",
+                headers=upstream_headers(api_token, p["key"]),
+                json=payload_body,
+                timeout=12,
+            )
+            res_json = r.json()
+            meta_code = (res_json.get("meta") or {}).get("code")
+            rows = ((res_json.get("data") or {}).get("rows")) or []
+            if meta_code != 0 or not rows:
+                return {"ok": False, "message": res_json.get("message") or "Out of stock or invalid range."}
+            row0 = rows[0] if isinstance(rows[0], dict) else {}
+            full_num = str(row0.get("number") or "").strip()
+            if not full_num:
+                return {"ok": False, "message": res_json.get("message") or "No number returned by ZebraSMS."}
+            no_plus = full_num.lstrip("+")
+            nat_num = no_plus
+            country = str(row0.get("country") or "Default")
+            operator = str(row0.get("operator") or "")
+            if row0.get("range"):
+                raw_range = str(row0.get("range")).strip()
+            if row0.get("expires_ms"):
+                try:
+                    exp_val = float(row0.get("expires_ms"))
+                    if exp_val > 1e12:
+                        exp_val /= 1000.0
+                    if exp_val > time.time():
+                        expires_ts = exp_val
+                except (ValueError, TypeError):
+                    pass
+
+        else:  # zenex
+            num_ep = (p.get("number_endpoint") or "").strip()
+            if not num_ep:
+                return {"ok": False, "message": f"{p['name']} does not have a number allocation endpoint configured."}
+            r = requests.post(
+                f"{p['base_url']}{num_ep}",
+                headers=upstream_headers(api_token, p["key"]),
+                json={"range": str(raw_range or clean_rid).strip()},
+                timeout=12,
+            )
+            res_json = r.json()
+            data = res_json.get("data") if isinstance(res_json.get("data"), dict) else res_json
+            full_num = str(data.get("full_number") or data.get("number") or "").strip()
+            if not full_num:
+                return {"ok": False, "message": res_json.get("message", "Out of stock or invalid range.")}
+            no_plus = full_num.lstrip("+")
+            nat_num = str(data.get("national_number") or no_plus).strip()
+            country = str(data.get("country") or "Default")
+            operator = str(data.get("operator") or "")
+
     except Exception as e:
         return {"ok": False, "message": f"{p['name']} API Error: {e}"}
 
     now = time.time()
+    if expires_ts is None:
+        expires_ts = now + NUMBER_TTL_SECONDS
     num_id = secrets.token_hex(6)
     range_str = str(raw_range).strip() or (f"{clean_rid}XXX" if clean_rid else "ANY")
     rate_val = calculate_rate(country, "", user_dict.get("agent_email", ""))
@@ -1686,7 +1810,7 @@ def _create_number_for_user(user_dict: dict, raw_range: str, panel_key: str = "1
         "operator": operator,
         "country_rate": rate_val,
         "created_at": now,
-        "expires_at": now + NUMBER_TTL_SECONDS,
+        "expires_at": expires_ts,
         "otp_message": None,
         "earned_amount": 0.0,
     }
@@ -1735,7 +1859,7 @@ def _fetch_incoming_otps_for_panel(panel_key: str) -> list:
                     "number": str(item.get("number") or ""),
                     "message": str(item.get("full_message") or item.get("message") or ""),
                 })
-        else:  # slvirtual
+        elif p["style"] == "slvirtual":
             r = requests.get(f"{p['base_url']}/otp-monitor?limit=100", headers=upstream_headers(api_token, p["key"]), timeout=10)
             raw_list = r.json().get("data") or []
             for item in raw_list:
@@ -1743,6 +1867,18 @@ def _fetch_incoming_otps_for_panel(panel_key: str) -> list:
                     "number": str(item.get("phoneNumber") or item.get("number") or ""),
                     "message": str(item.get("fullSms") or item.get("message") or ""),
                 })
+        elif p["style"] == "zebrasms":
+            r = requests.get(f"{p['base_url']}/publicapi/getupdate", headers=upstream_headers(api_token, p["key"]), timeout=10)
+            res_json = r.json()
+            if (res_json.get("meta") or {}).get("code") == 0:
+                raw_list = ((res_json.get("data") or {}).get("rows")) or []
+                for item in raw_list:
+                    if isinstance(item, dict):
+                        otps.append({
+                            "number": str(item.get("number") or ""),
+                            "message": str(item.get("message") or ""),
+                            "sender": str(item.get("sender") or ""),
+                        })
     except Exception:
         return []
     return otps
@@ -1782,7 +1918,8 @@ def _fetch_user_numbers_and_sync_otp(user_dict: dict, panel_key: str = None):
                     continue
                 if otp_num.endswith(num_clean) or num_clean.endswith(otp_num):
                     msg_text = otp.get("message", "")
-                    service_sid = detect_service_from_message(msg_text)
+                    sender_name = str(otp.get("sender") or "").strip()
+                    service_sid = sender_name or detect_service_from_message(msg_text)
                     rate_used = calculate_rate(it["country"], service_sid, user_dict.get("agent_email", ""))
                     now_utc = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
@@ -1937,17 +2074,43 @@ def _normalize_liveaccess_for_panel(p: dict, raw_json: dict):
             clean_ranges = [str(x).split("|")[-1].strip() for x in (rng_list or []) if str(x).strip()]
             services.append({"sid": sid, "ranges": clean_ranges})
         return _filter_liveaccess_5h({"meta": {"code": 200, "status": "success"}, "data": {"services": services}})
-    # slvirtual
-    rows = (raw_json or {}).get("data") or []
-    by_svc = {}
-    for item in rows:
-        sid = str(item.get("service") or item.get("country") or "SERVICE")
-        rng = str(item.get("tag") or item.get("prefix") or "").strip()
-        by_svc.setdefault(sid, [])
-        if rng and rng not in by_svc[sid]:
-            by_svc[sid].append(rng)
-    services = [{"sid": k, "ranges": v} for k, v in by_svc.items()]
-    return _filter_liveaccess_5h({"meta": {"code": 200, "status": "success"}, "data": {"services": services}})
+    if p["style"] == "slvirtual":
+        rows = (raw_json or {}).get("data") or []
+        by_svc = {}
+        for item in rows:
+            sid = str(item.get("service") or item.get("country") or "SERVICE")
+            rng = str(item.get("tag") or item.get("prefix") or "").strip()
+            by_svc.setdefault(sid, [])
+            if rng and rng not in by_svc[sid]:
+                by_svc[sid].append(rng)
+        services = [{"sid": k, "ranges": v} for k, v in by_svc.items()]
+        return _filter_liveaccess_5h({"meta": {"code": 200, "status": "success"}, "data": {"services": services}})
+    if p["style"] == "zenex":
+        mp = p.get("mapping") or {}
+        raw_list = _extract_nested(raw_json or {}, mp.get("list_key") or "data.active_ranges") or []
+        by_svc = {}
+        for item in raw_list:
+            if not isinstance(item, dict):
+                continue
+            sid = str(item.get(mp.get("service") or "service") or "SERVICE").strip()
+            rng = str(item.get(mp.get("range") or "range") or "").strip()
+            by_svc.setdefault(sid, [])
+            if rng and rng not in by_svc[sid]:
+                by_svc[sid].append(rng)
+        services = [{"sid": k, "ranges": v} for k, v in by_svc.items()]
+        return _filter_liveaccess_5h({"meta": {"code": 200, "status": "success"}, "data": {"services": services}})
+    if p["style"] == "zebrasms":
+        rows = ((raw_json or {}).get("data") or {}).get("rows") or []
+        services = []
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            sid = str(item.get("sender") or "SERVICE").strip()
+            rng_list = [str(r).strip() for r in (item.get("ranges") or []) if str(r).strip()]
+            if rng_list:
+                services.append({"sid": sid, "ranges": rng_list})
+        return _filter_liveaccess_5h({"meta": {"code": 200, "status": "success"}, "data": {"services": services}})
+    return _filter_liveaccess_5h(raw_json)
 
 
 def _fetch_single_panel_console_hits(p: dict) -> list:
@@ -1988,7 +2151,7 @@ def _fetch_single_panel_console_hits(p: dict) -> list:
                     "panel_name": p["name"],
                 })
 
-    else:  # slvirtual
+    elif p["style"] == "slvirtual":
         r = requests.get(f"{p['base_url']}/live-console?limit=50", headers=upstream_headers(token, p["key"]), timeout=10)
         raw = r.json()
         for item in (raw.get("data") or []):
@@ -2015,7 +2178,86 @@ def _fetch_single_panel_console_hits(p: dict) -> list:
                 "panel": p["key"],
                 "panel_name": p["name"],
             })
+
+    elif p["style"] == "zenex":
+        ep = p.get("endpoint") or "/v1/active-ranges"
+        mp = p.get("mapping") or {}
+        r = requests.get(f"{p['base_url']}{ep}", headers=upstream_headers(token, p["key"]), timeout=10)
+        raw = r.json()
+        raw_list = _extract_nested(raw if isinstance(raw, dict) else {}, mp.get("list_key") or "data.active_ranges") or []
+        for item in raw_list:
+            if not isinstance(item, dict):
+                continue
+            svc = str(item.get(mp.get("service") or "service") or "").strip()
+            t_val = item.get(mp.get("time") or "created_at")
+            hits.append({
+                "range": item.get(mp.get("range") or "range", ""),
+                "country": item.get("country", ""),
+                "service": svc,
+                "sid": svc,
+                "time": t_val,
+                "ts": t_val,
+                "message": item.get("message", ""),
+                "panel": p["key"],
+                "panel_name": p["name"],
+            })
+
+    elif p["style"] == "zebrasms":
+        r = requests.get(f"{p['base_url']}/publicapi/getupdate", headers=upstream_headers(token, p["key"]), timeout=10)
+        raw = r.json()
+        if (raw.get("meta") or {}).get("code") == 0:
+            for item in (((raw.get("data") or {}).get("rows")) or []):
+                if not isinstance(item, dict):
+                    continue
+                svc = str(item.get("sender") or "").strip()
+                t_val = item.get("at_ms")
+                hits.append({
+                    "number": item.get("number", ""),
+                    "country": item.get("country", ""),
+                    "operator": item.get("operator", ""),
+                    "service": svc,
+                    "sid": svc,
+                    "time": t_val,
+                    "ts": t_val,
+                    "message": item.get("message", ""),
+                    "panel": p["key"],
+                    "panel_name": p["name"],
+                })
+
     return hits
+
+
+def _fetch_liveaccess_for_panel(p: dict) -> dict:
+    token = get_api_token(p["key"])
+    if p["style"] == "sr1":
+        r = requests.get(f"{p['base_url']}/liveaccess", headers=upstream_headers(token, p["key"]), timeout=10)
+        return _normalize_liveaccess_for_panel(p, r.json())
+    if p["style"] == "yehub":
+        r = requests.get(f"{p['base_url']}/live_access_data", headers=upstream_headers(token, p["key"]), timeout=10)
+        return _normalize_liveaccess_for_panel(p, r.json())
+    if p["style"] == "slvirtual":
+        r = requests.get(f"{p['base_url']}/available-countries", headers=upstream_headers(token, p["key"]), timeout=10)
+        return _normalize_liveaccess_for_panel(p, r.json())
+    if p["style"] == "zenex":
+        ep = p.get("endpoint") or "/v1/active-ranges"
+        r = requests.get(f"{p['base_url']}{ep}", headers=upstream_headers(token, p["key"]), timeout=10)
+        return _normalize_liveaccess_for_panel(p, r.json())
+    if p["style"] == "zebrasms":
+        params = {}
+        try:
+            sender_q = (request.args.get("sender") or "").strip()
+            if sender_q:
+                params["sender"] = sender_q
+        except RuntimeError:
+            pass
+        r = requests.get(
+            f"{p['base_url']}/publicapi/liveaccess",
+            headers=upstream_headers(token, p["key"]),
+            params=params,
+            timeout=10,
+        )
+        return _normalize_liveaccess_for_panel(p, r.json())
+    return {"meta": {"code": 200, "status": "success"}, "data": {"services": []}}
 
 
 @app.route("/api/bridge/console")
@@ -2044,7 +2286,7 @@ def bridge_console(user):
 
     combined_hits = []
     errors = []
-    for pk in ["1", "2", "3"]:
+    for pk in ["1", "2", "3", "4", "5"]:
         p = PANELS[pk]
         if not get_panel_active_flag(pk):
             continue
@@ -2070,18 +2312,8 @@ def bridge_liveaccess(user):
     p = resolve_panel()
     if not get_panel_active_flag(p["key"]):
         return panel_off_json(p["key"], 503)
-    token = get_api_token(p["key"])
     try:
-        if p["style"] == "sr1":
-            r = requests.get(f"{p['base_url']}/liveaccess", headers=upstream_headers(token, p["key"]), timeout=10)
-            res = _normalize_liveaccess_for_panel(p, r.json())
-        elif p["style"] == "yehub":
-            r = requests.get(f"{p['base_url']}/live_access_data", headers=upstream_headers(token, p["key"]), timeout=10)
-            res = _normalize_liveaccess_for_panel(p, r.json())
-        else:
-            r = requests.get(f"{p['base_url']}/available-countries", headers=upstream_headers(token, p["key"]), timeout=10)
-            res = _normalize_liveaccess_for_panel(p, r.json())
-
+        res = _fetch_liveaccess_for_panel(p)
         if isinstance(res, dict):
             res["panel"] = p["key"]
             res["voltx_active"] = get_panel_active_flag("1")
@@ -2119,7 +2351,6 @@ def bridge_my_numbers(user):
     })
 
 
-
 # ---------------- PUBLIC / USER API v1 ENDPOINTS ----------------
 
 @app.route("/api/v1/liveaccess", methods=["GET"])
@@ -2128,17 +2359,8 @@ def api_v1_liveaccess(user):
     p = resolve_panel()
     if not get_panel_active_flag(p["key"]):
         return panel_off_json(p["key"], 503)
-    token = get_api_token(p["key"])
     try:
-        if p["style"] == "sr1":
-            r = requests.get(f"{p['base_url']}/liveaccess", headers=upstream_headers(token, p["key"]), timeout=10)
-            return jsonify(_normalize_liveaccess_for_panel(p, r.json()))
-        elif p["style"] == "yehub":
-            r = requests.get(f"{p['base_url']}/live_access_data", headers=upstream_headers(token, p["key"]), timeout=10)
-            return jsonify(_normalize_liveaccess_for_panel(p, r.json()))
-        else:
-            r = requests.get(f"{p['base_url']}/available-countries", headers=upstream_headers(token, p["key"]), timeout=10)
-            return jsonify(_normalize_liveaccess_for_panel(p, r.json()))
+        return jsonify(_fetch_liveaccess_for_panel(p))
     except Exception as e:
         return jsonify({"meta": {"code": 500, "status": "error"}, "message": str(e), "data": {"services": []}}), 500
 
