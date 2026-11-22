@@ -27,17 +27,58 @@ app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 
 DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel.db"))
 
-# ---------------- PANEL BRAND & PRIVATE API TOKEN ----------------
-PANEL_BRAND_NAME = os.environ.get("PANEL_BRAND_NAME", "SR 1").strip() or "SR 1"
+# ---------------- MULTI-PANEL CONFIG (BASE URLs IN app.py, KEYS IN ENV) ----------------
+PANELS = {
+    "1": {
+        "key": "1",
+        "slug": "panel1",
+        "name": os.environ.get("PANEL1_BRAND_NAME", "SR 1").strip() or "SR 1",
+        "setting_key": "voltx_panel_active",
+        "base_url": os.environ.get(
+            "PANEL1_BASE_URL",
+            "https://api.2oo9.cloud/MXS47FLFX0U/tnevs/@public/api"
+        ).rstrip("/"),
+        "api_key_env": "PANEL1_API_KEY",
+        "fallback_key_env": "UPSTREAM_API_KEY",
+        "auth_header": "mauthapi",
+        "style": "sr1",
+    },
+    "2": {
+        "key": "2",
+        "slug": "panel2",
+        "name": os.environ.get("PANEL2_BRAND_NAME", "YEHUB").strip() or "YEHUB",
+        "setting_key": "panel_2_active",
+        "base_url": os.environ.get(
+            "PANEL2_BASE_URL",
+            "https://yesms.online/api"
+        ).rstrip("/"),
+        "api_key_env": "PANEL2_API_KEY",
+        "fallback_key_env": "",
+        "auth_header": "authkey",
+        "style": "yehub",
+    },
+    "3": {
+        "key": "3",
+        "slug": "panel3",
+        "name": os.environ.get("PANEL3_BRAND_NAME", "SL Virtual").strip() or "SL Virtual",
+        "setting_key": "panel_3_active",
+        "base_url": os.environ.get(
+            "PANEL3_BASE_URL",
+            "https://slvirtualnumber.com/api/v1/developer"
+        ).rstrip("/"),
+        "api_key_env": "PANEL3_API_KEY",
+        "fallback_key_env": "",
+        "auth_header": "x-api-key",
+        "style": "slvirtual",
+    },
+}
+
+PANEL_BRAND_NAME = PANELS["1"]["name"]
 PANEL_OFF_MSG = f"{PANEL_BRAND_NAME} Panel is currently turned OFF by Admin."
 
-PRIVATE_API_TOKEN = os.environ.get("UPSTREAM_API_KEY", "YOUR_PRIVATE_API_TOKEN_HERE").strip()
-
-UPSTREAM_BASE_URL = os.environ.get(
-    "UPSTREAM_BASE_URL",
-    "https://api.2oo9.cloud/MXS47FLFX0U/tnevs/@public/api"
-).rstrip("/")
-
+# Backward compatibility constants for Panel 1
+PRIVATE_API_TOKEN = os.environ.get("PANEL1_API_KEY", os.environ.get("UPSTREAM_API_KEY", "")).strip()
+UPSTREAM_BASE_URL = PANELS["1"]["base_url"]
 GETNUM_API_URL = f"{UPSTREAM_BASE_URL}/getnum"
 LIVEACCESS_API_URL = f"{UPSTREAM_BASE_URL}/liveaccess"
 SUCCESS_OTP_API_URL = f"{UPSTREAM_BASE_URL}/success-otp"
@@ -208,7 +249,6 @@ def restore_sqlite_from_firestore_if_empty():
         conn = get_db()
         cur = conn.cursor()
 
-        # Restore settings
         for doc in fs.collection("settings").stream():
             d = doc.to_dict() or {}
             k = d.get("k") or doc.id
@@ -216,7 +256,6 @@ def restore_sqlite_from_firestore_if_empty():
             if k is not None and v is not None:
                 cur.execute("INSERT OR IGNORE INTO settings (k, v) VALUES (?, ?)", (str(k), str(v)))
 
-        # Restore agents
         for doc in fs.collection("agents").stream():
             d = doc.to_dict() or {}
             em = (d.get("email") or doc.id or "").strip().lower()
@@ -226,7 +265,6 @@ def restore_sqlite_from_firestore_if_empty():
                     (em, d["password_hash"], d.get("created_at") or datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"))
                 )
 
-        # Restore users
         for doc in fs.collection("users").stream():
             d = doc.to_dict() or {}
             em = (d.get("email") or doc.id or "").strip().lower()
@@ -255,7 +293,6 @@ def restore_sqlite_from_firestore_if_empty():
                     d.get("created_at") or datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
                 ))
 
-        # Restore rates
         for doc in fs.collection("country_rates").stream():
             d = doc.to_dict() or {}
             c = d.get("country") or doc.id
@@ -274,7 +311,6 @@ def restore_sqlite_from_firestore_if_empty():
             if s and d.get("max_rate") is not None:
                 cur.execute("INSERT OR IGNORE INTO otp_rate_limits (service, max_rate) VALUES (?, ?)", (str(s), float(d["max_rate"])))
 
-        # Restore withdrawals
         for doc in fs.collection("withdrawals").stream():
             d = doc.to_dict() or {}
             wid = d.get("id") or doc.id
@@ -297,7 +333,6 @@ def restore_sqlite_from_firestore_if_empty():
                     d.get("decided_at") or "",
                 ))
 
-        # Restore payment addresses
         for doc in fs.collection("payment_addresses").stream():
             d = doc.to_dict() or {}
             aid = d.get("id") or doc.id
@@ -386,9 +421,14 @@ def init_db():
             created_ts REAL NOT NULL,
             expires_ts REAL NOT NULL,
             otp_message TEXT,
-            earned_amount REAL DEFAULT 0.0
+            earned_amount REAL DEFAULT 0.0,
+            panel_key TEXT DEFAULT '1'
         )
     """)
+
+    num_cols = [r["name"] for r in cur.execute("PRAGMA table_info(user_numbers)").fetchall()]
+    if "panel_key" not in num_cols:
+        cur.execute("ALTER TABLE user_numbers ADD COLUMN panel_key TEXT DEFAULT '1'")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS otp_logs (
@@ -401,9 +441,14 @@ def init_db():
             country TEXT,
             service TEXT,
             rate REAL DEFAULT 0.0,
-            message TEXT
+            message TEXT,
+            panel_key TEXT DEFAULT '1'
         )
     """)
+
+    log_cols = [r["name"] for r in cur.execute("PRAGMA table_info(otp_logs)").fetchall()]
+    if "panel_key" not in log_cols:
+        cur.execute("ALTER TABLE otp_logs ADD COLUMN panel_key TEXT DEFAULT '1'")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS withdrawals (
@@ -480,6 +525,8 @@ def init_db():
 
     cur.execute("INSERT OR IGNORE INTO settings (k, v) VALUES ('agent_mail_auto_account', '1')")
     cur.execute("INSERT OR IGNORE INTO settings (k, v) VALUES ('voltx_panel_active', '1')")
+    cur.execute("INSERT OR IGNORE INTO settings (k, v) VALUES ('panel_2_active', '1')")
+    cur.execute("INSERT OR IGNORE INTO settings (k, v) VALUES ('panel_3_active', '1')")
 
     for c, r in DEFAULT_COUNTRY_RATES.items():
         cur.execute("INSERT OR IGNORE INTO country_rates (country, rate) VALUES (?, ?)", (c, r))
@@ -493,11 +540,70 @@ def init_db():
     restore_sqlite_from_firestore_if_empty()
 
     sync_setting_to_firestore("agent_mail_auto_account")
-    sync_setting_to_firestore("voltx_panel_active")
+    for p in PANELS.values():
+        sync_setting_to_firestore(p["setting_key"])
+
     for c, r in get_country_rates().items():
         fs_set_doc("country_rates", c, {"country": c, "rate": r}, merge=True)
     for s, r in get_service_rates().items():
         fs_set_doc("service_rates", s, {"service": s, "rate": r}, merge=True)
+
+
+# ---------------- PANEL & SETTINGS HELPERS ----------------
+
+def resolve_panel(raw_panel=None) -> dict:
+    val = str(raw_panel or "").strip().lower()
+    if not val:
+        try:
+            val = str(
+                request.args.get("panel")
+                or request.headers.get("X-Panel")
+                or ((request.get_json(silent=True) or {}).get("panel") if request.is_json else "")
+                or ""
+            ).strip().lower()
+        except RuntimeError:
+            val = ""
+
+    if val in PANELS:
+        return PANELS[val]
+    for p in PANELS.values():
+        if val in (p["slug"].lower(), p["name"].lower(), f"panel{p['key']}", f"panel_{p['key']}"):
+            return p
+    return PANELS["1"]
+
+
+def get_panel_active_flag(panel_key: str = "1") -> bool:
+    p = resolve_panel(panel_key)
+    conn = get_db()
+    row = conn.execute("SELECT v FROM settings WHERE k = ?", (p["setting_key"],)).fetchone()
+    conn.close()
+    return (row["v"] == "1") if row else True
+
+
+def set_panel_active_flag(panel_key: str, enabled: bool):
+    p = resolve_panel(panel_key)
+    conn = get_db()
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (k, v) VALUES (?, ?)",
+        (p["setting_key"], "1" if enabled else "0")
+    )
+    conn.commit()
+    conn.close()
+    sync_setting_to_firestore(p["setting_key"])
+
+
+def get_panels_status_map() -> dict:
+    return {
+        p["key"]: {
+            "key": p["key"],
+            "slug": p["slug"],
+            "name": p["name"],
+            "setting_key": p["setting_key"],
+            "active": get_panel_active_flag(p["key"]),
+            "configured": bool(get_api_token(p["key"])),
+        }
+        for p in PANELS.values()
+    }
 
 
 def get_auto_account_flag() -> bool:
@@ -519,30 +625,23 @@ def set_auto_account_flag(enabled: bool):
 
 
 def get_voltx_panel_flag() -> bool:
-    conn = get_db()
-    row = conn.execute("SELECT v FROM settings WHERE k = 'voltx_panel_active'").fetchone()
-    conn.close()
-    return (row["v"] == "1") if row else True
+    return get_panel_active_flag("1")
 
 
 def set_voltx_panel_flag(enabled: bool):
-    conn = get_db()
-    conn.execute(
-        "INSERT OR REPLACE INTO settings (k, v) VALUES ('voltx_panel_active', ?)",
-        ("1" if enabled else "0",)
-    )
-    conn.commit()
-    conn.close()
-    sync_setting_to_firestore("voltx_panel_active")
+    set_panel_active_flag("1", enabled)
 
 
-def panel_off_json(status_code: int = 503):
+def panel_off_json(panel_key: str = "1", status_code: int = 503):
+    p = resolve_panel(panel_key)
+    msg = f"{p['name']} Panel is currently turned OFF by Admin."
     return jsonify({
         "meta": {"code": status_code, "status": "off"},
-        "voltx_active": False,
+        "panel": p["key"],
+        "panel_name": p["name"],
+        "voltx_active": get_panel_active_flag("1"),
         "panel_active": False,
-        "panel_name": PANEL_BRAND_NAME,
-        "message": PANEL_OFF_MSG,
+        "message": msg,
         "data": {"hits": [], "services": []},
     }), status_code
 
@@ -623,7 +722,7 @@ def ensure_agent_exists(agent_email: str, password_plain: str = None):
         sync_agent_to_firestore(agent_email)
 
 
-# ---------------- COMMON HELPERS ----------------
+# ---------------- COMMON & UPSTREAM HELPERS ----------------
 
 def get_base_url():
     if BASE_URL:
@@ -634,14 +733,19 @@ def get_base_url():
         return ""
 
 
-def get_api_token() -> str:
-    return (PRIVATE_API_TOKEN or os.environ.get("UPSTREAM_API_KEY", "")).strip()
+def get_api_token(panel_key: str = "1") -> str:
+    p = resolve_panel(panel_key)
+    token = os.environ.get(p["api_key_env"], "").strip()
+    if not token and p.get("fallback_key_env"):
+        token = os.environ.get(p["fallback_key_env"], "").strip()
+    return token
 
 
-def upstream_headers(token: str = None) -> dict:
-    api_key = (token if token is not None else get_api_token()).strip()
+def upstream_headers(token: str = None, panel_key: str = "1") -> dict:
+    p = resolve_panel(panel_key)
+    api_key = (token if token is not None else get_api_token(p["key"])).strip()
     return {
-        "mauthapi": api_key,
+        p["auth_header"]: api_key,
         "Content-Type": "application/json",
     }
 
@@ -780,6 +884,8 @@ def public_api_key_required(f):
     def decorated(*args, **kwargs):
         supplied_key = (
             request.headers.get("X-API-Key")
+            or request.headers.get("x-api-key")
+            or request.headers.get("authkey")
             or request.headers.get("mauthapi")
             or request.args.get("api_key")
             or ((request.get_json(silent=True) or {}).get("api_key") if request.is_json else "")
@@ -789,7 +895,7 @@ def public_api_key_required(f):
         if not supplied_key:
             return jsonify({
                 "meta": {"code": 401, "status": "unauthorized"},
-                "message": "API key is missing. Pass mauthapi header."
+                "message": "API key is missing. Pass x-api-key / authkey / mauthapi header."
             }), 401
 
         conn = get_db()
@@ -1266,10 +1372,15 @@ def admin_panel():
     agent_account_counts = {r["agent_email"]: r["cnt"] for r in count_rows}
     conn.close()
 
+    panels_status = get_panels_status_map()
+
     return render_template(
         "admin_panel.html",
         agent_mail_auto_account=get_auto_account_flag(),
-        voltx_panel_active=get_voltx_panel_flag(),
+        voltx_panel_active=panels_status["1"]["active"],
+        panel_2_active=panels_status["2"]["active"],
+        panel_3_active=panels_status["3"]["active"],
+        panels_status=panels_status,
         panel_brand_name=PANEL_BRAND_NAME,
         country_rates=get_country_rates(),
         service_rates=get_service_rates(),
@@ -1283,14 +1394,21 @@ def admin_panel():
     )
 
 
+@app.route("/admin/toggle-panel/<panel_key>", methods=["POST"])
+@admin_login_required
+def toggle_any_panel(panel_key):
+    p = resolve_panel(panel_key)
+    new_state = not get_panel_active_flag(p["key"])
+    set_panel_active_flag(p["key"], new_state)
+    state_text = "ON" if new_state else "OFF"
+    flash(f"{p['name']} Panel is now {state_text}.", "success")
+    return redirect(url_for("admin_panel"))
+
+
 @app.route("/admin/toggle-voltx-panel", methods=["POST"])
 @admin_login_required
 def toggle_voltx_panel():
-    new_state = not get_voltx_panel_flag()
-    set_voltx_panel_flag(new_state)
-    state_text = "ON" if new_state else "OFF"
-    flash(f"{PANEL_BRAND_NAME} Panel is now {state_text}.", "success")
-    return redirect(url_for("admin_panel"))
+    return toggle_any_panel("1")
 
 
 @app.route("/admin/add-agent", methods=["POST"])
@@ -1476,45 +1594,95 @@ def manage_user_api_key(user, action):
     return jsonify({"ok": False, "message": "Invalid action."}), 400
 
 
-# ---------------- SHARED NUMBER & OTP LOGIC ----------------
+# ---------------- SHARED NUMBER & OTP LOGIC (MULTI-PANEL) ----------------
 
-def _create_number_for_user(user_dict: dict, raw_range: str):
-    if not get_voltx_panel_flag():
-        return {"ok": False, "message": PANEL_OFF_MSG}
+def _create_number_for_user(user_dict: dict, raw_range: str, panel_key: str = "1"):
+    p = resolve_panel(panel_key)
+    if not get_panel_active_flag(p["key"]):
+        return {"ok": False, "message": f"{p['name']} Panel is currently turned OFF by Admin."}
+
+    api_token = get_api_token(p["key"])
+    if not api_token:
+        return {"ok": False, "message": f"{p['name']} API key is not configured in environment ({p['api_key_env']})."}
 
     clean_rid = str(raw_range or "").upper().replace("X", "").replace("+", "").strip()
-    if not clean_rid:
+    if not clean_rid and p["style"] != "slvirtual":
         return {"ok": False, "message": "Please enter a valid range."}
 
     try:
-        r = requests.post(
-            GETNUM_API_URL,
-            headers=upstream_headers(),
-            json={"rid": clean_rid},
-            timeout=12,
-        )
-        res_json = r.json()
+        if p["style"] == "sr1":
+            r = requests.post(
+                f"{p['base_url']}/getnum",
+                headers=upstream_headers(api_token, p["key"]),
+                json={"rid": clean_rid},
+                timeout=12,
+            )
+            res_json = r.json()
+            if res_json.get("meta", {}).get("code") != 200 or not res_json.get("data"):
+                return {"ok": False, "message": res_json.get("message", "Out of stock or invalid range.")}
+            data = res_json["data"]
+            full_num = str(data.get("full_number", "")).strip()
+            no_plus = str(data.get("no_plus_number") or full_num.lstrip("+")).strip()
+            nat_num = str(data.get("national_number") or no_plus).strip()
+            country = data.get("country", "Default")
+            operator = data.get("operator", "")
+
+        elif p["style"] == "yehub":
+            r = requests.post(
+                f"{p['base_url']}/allocate_number",
+                headers=upstream_headers(api_token, p["key"]),
+                json={"range_id": str(raw_range or clean_rid).strip()},
+                timeout=12,
+            )
+            res_json = r.json()
+            data = res_json.get("data") if isinstance(res_json.get("data"), dict) else res_json
+            if not res_json.get("success") and not data.get("full_number") and not data.get("national_number"):
+                return {"ok": False, "message": res_json.get("message", "Out of stock or invalid range.")}
+            nat_num = str(data.get("national_number") or data.get("number") or "").strip()
+            full_num = str(data.get("full_number") or (f"+{nat_num.lstrip('+')}" if nat_num else "")).strip()
+            no_plus = str(data.get("no_plus_number") or full_num.lstrip("+")).strip()
+            country = data.get("country", "Default")
+            operator = data.get("operator", "")
+
+        else:  # slvirtual
+            payload_body = {}
+            if clean_rid:
+                payload_body["rangePrefix"] = clean_rid
+            payload_body["service"] = "ANY"
+            r = requests.post(
+                f"{p['base_url']}/rent",
+                headers=upstream_headers(api_token, p["key"]),
+                json=payload_body,
+                timeout=12,
+            )
+            res_json = r.json()
+            data = res_json.get("data") if isinstance(res_json.get("data"), dict) else {}
+            full_num = str(data.get("phoneNumber") or data.get("full_number") or "").strip()
+            if not full_num:
+                return {"ok": False, "message": res_json.get("message", "Out of stock or invalid range.")}
+            no_plus = full_num.lstrip("+")
+            nat_num = no_plus
+            country = data.get("country", "Default")
+            operator = data.get("tag", "")
+
     except Exception as e:
-        return {"ok": False, "message": f"Upstream API Error: {e}"}
+        return {"ok": False, "message": f"{p['name']} API Error: {e}"}
 
-    if res_json.get("meta", {}).get("code") != 200 or not res_json.get("data"):
-        return {"ok": False, "message": res_json.get("message", "Out of stock or invalid range.")}
-
-    data = res_json["data"]
-    country = data.get("country", "Default")
     now = time.time()
     num_id = secrets.token_hex(6)
-    range_str = str(raw_range).strip() or f"{clean_rid}XXX"
+    range_str = str(raw_range).strip() or (f"{clean_rid}XXX" if clean_rid else "ANY")
     rate_val = calculate_rate(country, "", user_dict.get("agent_email", ""))
 
     entry = {
         "id": num_id,
+        "panel": p["key"],
+        "panel_name": p["name"],
         "range": range_str,
-        "full_number": data.get("full_number", ""),
-        "national_number": data.get("national_number", ""),
-        "no_plus_number": data.get("no_plus_number", ""),
+        "full_number": full_num,
+        "national_number": nat_num,
+        "no_plus_number": no_plus,
         "country": country,
-        "operator": data.get("operator", ""),
+        "operator": operator,
         "country_rate": rate_val,
         "created_at": now,
         "expires_at": now + NUMBER_TTL_SECONDS,
@@ -1526,12 +1694,12 @@ def _create_number_for_user(user_dict: dict, raw_range: str):
     conn.execute("""
         INSERT INTO user_numbers (
             id, user_email, range_val, full_number, national_number, no_plus_number,
-            country, operator, country_rate, created_ts, expires_ts, otp_message, earned_amount
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            country, operator, country_rate, created_ts, expires_ts, otp_message, earned_amount, panel_key
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         num_id, user_dict["email"], range_str, entry["full_number"], entry["national_number"],
         entry["no_plus_number"], country, entry["operator"], rate_val,
-        entry["created_at"], entry["expires_at"], None, 0.0
+        entry["created_at"], entry["expires_at"], None, 0.0, p["key"]
     ))
     conn.commit()
     conn.close()
@@ -1540,69 +1708,113 @@ def _create_number_for_user(user_dict: dict, raw_range: str):
     return {"ok": True, "item": entry}
 
 
-def _fetch_user_numbers_and_sync_otp(user_dict: dict):
+def _fetch_incoming_otps_for_panel(panel_key: str) -> list:
+    p = resolve_panel(panel_key)
+    if not get_panel_active_flag(p["key"]):
+        return []
+    api_token = get_api_token(p["key"])
+    if not api_token:
+        return []
+
+    otps = []
+    try:
+        if p["style"] == "sr1":
+            r = requests.get(f"{p['base_url']}/success-otp", headers=upstream_headers(api_token, p["key"]), timeout=10)
+            raw_list = (r.json().get("data") or {}).get("otps") or []
+            for item in raw_list:
+                otps.append({
+                    "number": str(item.get("number") or ""),
+                    "message": str(item.get("message") or ""),
+                })
+        elif p["style"] == "yehub":
+            r = requests.get(f"{p['base_url']}/user_numbers", headers=upstream_headers(api_token, p["key"]), timeout=10)
+            raw_list = r.json().get("logs") or []
+            for item in raw_list:
+                otps.append({
+                    "number": str(item.get("number") or ""),
+                    "message": str(item.get("full_message") or item.get("message") or ""),
+                })
+        else:  # slvirtual
+            r = requests.get(f"{p['base_url']}/otp-monitor?limit=100", headers=upstream_headers(api_token, p["key"]), timeout=10)
+            raw_list = r.json().get("data") or []
+            for item in raw_list:
+                otps.append({
+                    "number": str(item.get("phoneNumber") or item.get("number") or ""),
+                    "message": str(item.get("fullSms") or item.get("message") or ""),
+                })
+    except Exception:
+        return []
+    return otps
+
+
+def _fetch_user_numbers_and_sync_otp(user_dict: dict, panel_key: str = None):
     now = time.time()
     conn = get_db()
-    rows = conn.execute(
-        "SELECT * FROM user_numbers WHERE user_email = ? ORDER BY created_ts DESC",
-        (user_dict["email"],)
-    ).fetchall()
-    items = [dict(r) for r in rows]
+    if panel_key:
+        p = resolve_panel(panel_key)
+        rows = conn.execute(
+            "SELECT * FROM user_numbers WHERE user_email = ? AND panel_key = ? ORDER BY created_ts DESC",
+            (user_dict["email"], p["key"])
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM user_numbers WHERE user_email = ? ORDER BY created_ts DESC",
+            (user_dict["email"],)
+        ).fetchall()
 
+    items = [dict(r) for r in rows]
     synced_num_ids = []
     synced_log_ids = []
 
-    api_token = get_api_token()
     active_items = [it for it in items if it["expires_ts"] > now and not it["otp_message"]]
+    if active_items:
+        otps_by_panel = {}
+        for it in active_items:
+            pk = str(it.get("panel_key") or "1")
+            if pk not in otps_by_panel:
+                otps_by_panel[pk] = _fetch_incoming_otps_for_panel(pk)
 
-    if active_items and api_token and get_voltx_panel_flag():
-        try:
-            r = requests.get(SUCCESS_OTP_API_URL, headers=upstream_headers(api_token), timeout=10)
-            otps = (r.json().get("data") or {}).get("otps") or []
-            for it in active_items:
-                num_clean = str(it["no_plus_number"] or "")
-                if not num_clean:
+            for otp in otps_by_panel[pk]:
+                num_clean = str(it["no_plus_number"] or "").lstrip("+")
+                otp_num = str(otp.get("number") or "").lstrip("+")
+                if not num_clean or not otp_num:
                     continue
-                for otp in otps:
-                    otp_num = str(otp.get("number", ""))
-                    if otp_num.endswith(num_clean) or num_clean.endswith(otp_num):
-                        msg_text = otp.get("message", "")
-                        service_sid = detect_service_from_message(msg_text)
-                        rate_used = calculate_rate(it["country"], service_sid, user_dict.get("agent_email", ""))
-                        now_utc = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+                if otp_num.endswith(num_clean) or num_clean.endswith(otp_num):
+                    msg_text = otp.get("message", "")
+                    service_sid = detect_service_from_message(msg_text)
+                    rate_used = calculate_rate(it["country"], service_sid, user_dict.get("agent_email", ""))
+                    now_utc = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
-                        it["otp_message"] = msg_text
-                        it["earned_amount"] = rate_used
+                    it["otp_message"] = msg_text
+                    it["earned_amount"] = rate_used
 
-                        conn.execute(
-                            "UPDATE user_numbers SET otp_message = ?, earned_amount = ? WHERE id = ?",
-                            (msg_text, rate_used, it["id"])
+                    conn.execute(
+                        "UPDATE user_numbers SET otp_message = ?, earned_amount = ? WHERE id = ?",
+                        (msg_text, rate_used, it["id"])
+                    )
+                    conn.execute(
+                        """UPDATE users
+                           SET balance = ROUND(balance + ?, 4),
+                               lifetime_earning = ROUND(lifetime_earning + ?, 4),
+                               otp_count = otp_count + 1
+                           WHERE email = ?""",
+                        (rate_used, rate_used, user_dict["email"])
+                    )
+                    cur_log = conn.execute(
+                        """INSERT INTO otp_logs (
+                            created_at, created_ts, user_email, agent_email,
+                            number_val, country, service, rate, message, panel_key
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            now_utc, now, user_dict["email"], user_dict["agent_email"],
+                            it["full_number"], it["country"], service_sid, rate_used, msg_text, pk
                         )
-                        conn.execute(
-                            """UPDATE users
-                               SET balance = ROUND(balance + ?, 4),
-                                   lifetime_earning = ROUND(lifetime_earning + ?, 4),
-                                   otp_count = otp_count + 1
-                               WHERE email = ?""",
-                            (rate_used, rate_used, user_dict["email"])
-                        )
-                        cur_log = conn.execute(
-                            """INSERT INTO otp_logs (
-                                created_at, created_ts, user_email, agent_email,
-                                number_val, country, service, rate, message
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                            (
-                                now_utc, now, user_dict["email"], user_dict["agent_email"],
-                                it["full_number"], it["country"], service_sid, rate_used, msg_text
-                            )
-                        )
-                        synced_num_ids.append(it["id"])
-                        if cur_log.lastrowid:
-                            synced_log_ids.append(cur_log.lastrowid)
-                        conn.commit()
-                        break
-        except Exception:
-            pass
+                    )
+                    synced_num_ids.append(it["id"])
+                    if cur_log.lastrowid:
+                        synced_log_ids.append(cur_log.lastrowid)
+                    conn.commit()
+                    break
 
     fresh_user = get_user_dict(user_dict["email"])
     current_balance = float(fresh_user["balance"]) if fresh_user else float(user_dict["balance"])
@@ -1618,8 +1830,12 @@ def _fetch_user_numbers_and_sync_otp(user_dict: dict):
     formatted = []
     for it in items:
         remaining = max(0, int(it["expires_ts"] - now))
+        pk = str(it.get("panel_key") or "1")
+        p_info = resolve_panel(pk)
         formatted.append({
             "id": it["id"],
+            "panel": pk,
+            "panel_name": p_info["name"],
             "range": it["range_val"],
             "full_number": it["full_number"],
             "national_number": it["national_number"],
@@ -1639,7 +1855,7 @@ def _fetch_user_numbers_and_sync_otp(user_dict: dict):
     return formatted, current_balance
 
 
-# ---------------- SESSION BRIDGE ENDPOINTS ----------------
+# ---------------- SESSION BRIDGE ENDPOINTS (MULTI-PANEL) ----------------
 
 def _filter_liveaccess_5h(payload):
     now = time.time()
@@ -1710,60 +1926,130 @@ def _filter_liveaccess_5h(payload):
     return payload
 
 
+def _normalize_liveaccess_for_panel(p: dict, raw_json: dict):
+    if p["style"] == "sr1":
+        return _filter_liveaccess_5h(raw_json)
+    if p["style"] == "yehub":
+        ranges_map = (raw_json or {}).get("ranges") or {}
+        services = []
+        for sid, rng_list in ranges_map.items():
+            clean_ranges = [str(x).split("|")[-1].strip() for x in (rng_list or []) if str(x).strip()]
+            services.append({"sid": sid, "ranges": clean_ranges})
+        return _filter_liveaccess_5h({"meta": {"code": 200, "status": "success"}, "data": {"services": services}})
+    # slvirtual
+    rows = (raw_json or {}).get("data") or []
+    by_svc = {}
+    for item in rows:
+        sid = str(item.get("service") or item.get("country") or "SERVICE")
+        rng = str(item.get("tag") or item.get("prefix") or "").strip()
+        by_svc.setdefault(sid, [])
+        if rng and rng not in by_svc[sid]:
+            by_svc[sid].append(rng)
+    services = [{"sid": k, "ranges": v} for k, v in by_svc.items()]
+    return _filter_liveaccess_5h({"meta": {"code": 200, "status": "success"}, "data": {"services": services}})
+
+
 @app.route("/api/bridge/console")
 @user_login_required
 def bridge_console(user):
-    if not get_voltx_panel_flag():
-        return panel_off_json(503)
+    p = resolve_panel()
+    if not get_panel_active_flag(p["key"]):
+        return panel_off_json(p["key"], 503)
+    token = get_api_token(p["key"])
     try:
-        r = requests.get(CONSOLE_API_URL, headers=upstream_headers(), timeout=10)
-        res = r.json()
+        if p["style"] == "sr1":
+            r = requests.get(f"{p['base_url']}/console", headers=upstream_headers(token, p["key"]), timeout=10)
+            res = r.json()
+        elif p["style"] == "yehub":
+            r = requests.get(f"{p['base_url']}/console_data", headers=upstream_headers(token, p["key"]), timeout=10)
+            raw = r.json()
+            hits = []
+            for row in (raw.get("table") or []):
+                if isinstance(row, list) and len(row) >= 4:
+                    hits.append({
+                        "range": row[0],
+                        "country": row[1],
+                        "message": row[2],
+                        "service": row[3],
+                        "ts": row[4] if len(row) > 4 else None,
+                    })
+            res = {"meta": {"code": 200, "status": "success"}, "data": {"hits": hits}}
+        else:  # slvirtual
+            r = requests.get(f"{p['base_url']}/live-console?limit=50", headers=upstream_headers(token, p["key"]), timeout=10)
+            raw = r.json()
+            hits = []
+            for item in (raw.get("data") or []):
+                hits.append({
+                    "number": item.get("maskedNumber", ""),
+                    "range": item.get("rangePrefix") or item.get("tag", ""),
+                    "country": item.get("country", ""),
+                    "service": item.get("service", ""),
+                    "message": item.get("rawSnippet") or item.get("otpCode", ""),
+                })
+            res = {"meta": {"code": 200, "status": "success"}, "data": {"hits": hits}}
+
         if isinstance(res, dict):
-            res["voltx_active"] = True
+            res["panel"] = p["key"]
+            res["voltx_active"] = get_panel_active_flag("1")
             res["panel_active"] = True
-            res["panel_name"] = PANEL_BRAND_NAME
+            res["panel_name"] = p["name"]
         return jsonify(res)
     except Exception as e:
-        return jsonify({"meta": {"code": 500, "status": "error"}, "voltx_active": True, "message": str(e), "data": {"hits": []}})
+        return jsonify({"meta": {"code": 500, "status": "error"}, "panel": p["key"], "message": str(e), "data": {"hits": []}})
 
 
 @app.route("/api/bridge/liveaccess")
 @user_login_required
 def bridge_liveaccess(user):
-    if not get_voltx_panel_flag():
-        return panel_off_json(503)
+    p = resolve_panel()
+    if not get_panel_active_flag(p["key"]):
+        return panel_off_json(p["key"], 503)
+    token = get_api_token(p["key"])
     try:
-        r = requests.get(LIVEACCESS_API_URL, headers=upstream_headers(), timeout=10)
-        res = _filter_liveaccess_5h(r.json())
+        if p["style"] == "sr1":
+            r = requests.get(f"{p['base_url']}/liveaccess", headers=upstream_headers(token, p["key"]), timeout=10)
+            res = _normalize_liveaccess_for_panel(p, r.json())
+        elif p["style"] == "yehub":
+            r = requests.get(f"{p['base_url']}/live_access_data", headers=upstream_headers(token, p["key"]), timeout=10)
+            res = _normalize_liveaccess_for_panel(p, r.json())
+        else:
+            r = requests.get(f"{p['base_url']}/available-countries", headers=upstream_headers(token, p["key"]), timeout=10)
+            res = _normalize_liveaccess_for_panel(p, r.json())
+
         if isinstance(res, dict):
-            res["voltx_active"] = True
+            res["panel"] = p["key"]
+            res["voltx_active"] = get_panel_active_flag("1")
             res["panel_active"] = True
-            res["panel_name"] = PANEL_BRAND_NAME
+            res["panel_name"] = p["name"]
         return jsonify(res)
     except Exception as e:
-        return jsonify({"meta": {"code": 500, "status": "error"}, "message": str(e), "data": {"services": []}})
+        return jsonify({"meta": {"code": 500, "status": "error"}, "panel": p["key"], "message": str(e), "data": {"services": []}})
 
 
 @app.route("/api/bridge/getnum", methods=["POST"])
 @user_login_required
 def bridge_getnum(user):
-    if not get_voltx_panel_flag():
-        return panel_off_json(503)
     payload = request.get_json(silent=True) or {}
+    p = resolve_panel(payload.get("panel"))
+    if not get_panel_active_flag(p["key"]):
+        return panel_off_json(p["key"], 503)
     raw_range = str(payload.get("range", "")).strip()
-    return jsonify(_create_number_for_user(user, raw_range))
+    return jsonify(_create_number_for_user(user, raw_range, p["key"]))
 
 
 @app.route("/api/bridge/my-numbers")
 @user_login_required
 def bridge_my_numbers(user):
-    formatted, current_balance = _fetch_user_numbers_and_sync_otp(user)
+    raw_panel = request.args.get("panel", "").strip()
+    p = resolve_panel(raw_panel) if raw_panel else None
+    formatted, current_balance = _fetch_user_numbers_and_sync_otp(user, p["key"] if p else None)
     return jsonify({
         "ok": True,
         "numbers": formatted,
         "balance": current_balance,
-        "panel_active": get_voltx_panel_flag(),
-        "panel_name": PANEL_BRAND_NAME,
+        "panels": get_panels_status_map(),
+        "panel_active": get_panel_active_flag(p["key"] if p else "1"),
+        "panel_name": p["name"] if p else PANEL_BRAND_NAME,
     })
 
 
@@ -1772,11 +2058,20 @@ def bridge_my_numbers(user):
 @app.route("/api/v1/liveaccess", methods=["GET"])
 @public_api_key_required
 def api_v1_liveaccess(user):
-    if not get_voltx_panel_flag():
-        return panel_off_json(503)
+    p = resolve_panel()
+    if not get_panel_active_flag(p["key"]):
+        return panel_off_json(p["key"], 503)
+    token = get_api_token(p["key"])
     try:
-        r = requests.get(LIVEACCESS_API_URL, headers=upstream_headers(), timeout=10)
-        return jsonify(_filter_liveaccess_5h(r.json()))
+        if p["style"] == "sr1":
+            r = requests.get(f"{p['base_url']}/liveaccess", headers=upstream_headers(token, p["key"]), timeout=10)
+            return jsonify(_normalize_liveaccess_for_panel(p, r.json()))
+        elif p["style"] == "yehub":
+            r = requests.get(f"{p['base_url']}/live_access_data", headers=upstream_headers(token, p["key"]), timeout=10)
+            return jsonify(_normalize_liveaccess_for_panel(p, r.json()))
+        else:
+            r = requests.get(f"{p['base_url']}/available-countries", headers=upstream_headers(token, p["key"]), timeout=10)
+            return jsonify(_normalize_liveaccess_for_panel(p, r.json()))
     except Exception as e:
         return jsonify({"meta": {"code": 500, "status": "error"}, "message": str(e), "data": {"services": []}}), 500
 
@@ -1784,11 +2079,12 @@ def api_v1_liveaccess(user):
 @app.route("/api/v1/getnum", methods=["POST"])
 @public_api_key_required
 def api_v1_getnum(user):
-    if not get_voltx_panel_flag():
-        return panel_off_json(503)
     payload = request.get_json(silent=True) or request.form.to_dict() or {}
-    raw_range = str(payload.get("range") or payload.get("rid") or "").strip()
-    res = _create_number_for_user(user, raw_range)
+    p = resolve_panel(payload.get("panel"))
+    if not get_panel_active_flag(p["key"]):
+        return panel_off_json(p["key"], 503)
+    raw_range = str(payload.get("range") or payload.get("rid") or payload.get("range_id") or payload.get("rangePrefix") or "").strip()
+    res = _create_number_for_user(user, raw_range, p["key"])
     if not res.get("ok"):
         return jsonify({"meta": {"code": 400, "status": "error"}, "message": res.get("message")}), 400
     return jsonify({"meta": {"code": 200, "status": "success"}, "data": res["item"]})
@@ -1797,7 +2093,9 @@ def api_v1_getnum(user):
 @app.route("/api/v1/my-numbers", methods=["GET"])
 @public_api_key_required
 def api_v1_my_numbers(user):
-    formatted, current_balance = _fetch_user_numbers_and_sync_otp(user)
+    raw_panel = request.args.get("panel", "").strip()
+    p = resolve_panel(raw_panel) if raw_panel else None
+    formatted, current_balance = _fetch_user_numbers_and_sync_otp(user, p["key"] if p else None)
     return jsonify({
         "meta": {"code": 200, "status": "success"},
         "data": {
@@ -1810,12 +2108,13 @@ def api_v1_my_numbers(user):
 @app.route("/api/v1/console", methods=["GET"])
 @public_api_key_required
 def api_v1_console(user):
-    if not get_voltx_panel_flag():
-        return panel_off_json(503)
+    p = resolve_panel()
+    if not get_panel_active_flag(p["key"]):
+        return panel_off_json(p["key"], 503)
     conn = get_db()
     logs = [dict(r) for r in conn.execute(
-        "SELECT id, created_at, number_val, country, service, rate, message FROM otp_logs WHERE user_email = ? ORDER BY id DESC LIMIT 100",
-        (user["email"],)
+        "SELECT id, created_at, number_val, country, service, rate, message, panel_key FROM otp_logs WHERE user_email = ? AND panel_key = ? ORDER BY id DESC LIMIT 100",
+        (user["email"], p["key"])
     ).fetchall()]
     conn.close()
     return jsonify({
@@ -1953,6 +2252,7 @@ def public_api_docs():
         base_path=f"{get_base_url()}/api/v1",
         public_docs=True,
         panel_brand_name=PANEL_BRAND_NAME,
+        panels_status=get_panels_status_map(),
     )
 
 
@@ -1964,8 +2264,9 @@ def dashboard(user):
         user=user,
         sidebar_items=SIDEBAR_ITEMS,
         active="dashboard",
-        voltx_panel_active=get_voltx_panel_flag(),
+        voltx_panel_active=get_panel_active_flag("1"),
         panel_brand_name=PANEL_BRAND_NAME,
+        panels_status=get_panels_status_map(),
     )
 
 
@@ -1981,7 +2282,8 @@ def section_page(user, section_key):
     if section_key not in valid:
         return redirect(url_for("dashboard"))
 
-    panel_active = get_voltx_panel_flag()
+    panel_active = get_panel_active_flag("1")
+    panels_status = get_panels_status_map()
 
     if section_key == "profile":
         return render_template(
@@ -1991,6 +2293,7 @@ def section_page(user, section_key):
             active="profile",
             voltx_panel_active=panel_active,
             panel_brand_name=PANEL_BRAND_NAME,
+            panels_status=panels_status,
         )
     if section_key == "get-number":
         return render_template(
@@ -2000,6 +2303,7 @@ def section_page(user, section_key):
             active="get-number",
             voltx_panel_active=panel_active,
             panel_brand_name=PANEL_BRAND_NAME,
+            panels_status=panels_status,
         )
     if section_key == "console":
         return render_template(
@@ -2009,6 +2313,7 @@ def section_page(user, section_key):
             active="console",
             voltx_panel_active=panel_active,
             panel_brand_name=PANEL_BRAND_NAME,
+            panels_status=panels_status,
         )
     if section_key == "access-list":
         return render_template(
@@ -2019,6 +2324,7 @@ def section_page(user, section_key):
             section=valid[section_key],
             voltx_panel_active=panel_active,
             panel_brand_name=PANEL_BRAND_NAME,
+            panels_status=panels_status,
         )
 
     return render_template(
@@ -2029,6 +2335,7 @@ def section_page(user, section_key):
         section=valid[section_key],
         voltx_panel_active=panel_active,
         panel_brand_name=PANEL_BRAND_NAME,
+        panels_status=panels_status,
     )
 
 
