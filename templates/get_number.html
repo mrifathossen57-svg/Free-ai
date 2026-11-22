@@ -1,10 +1,33 @@
 {% extends "base.html" %}
 {% block title %}Get Number{% endblock %}
 {% block content %}
+{% set ps = panels_status if panels_status is defined else {} %}
 {% set p_map = {
-  "1": {"key": "1", "name": "1 server", "active": voltx_panel_active if voltx_panel_active is defined else true},
-  "2": {"key": "2", "name": "2 server", "active": true},
-  "3": {"key": "3", "name": "3 server", "active": true}
+  "1": {
+    "key": "1",
+    "name": ps.get("1", {}).get("name", "1 server"),
+    "active": ps.get("1", {}).get("active", voltx_panel_active if voltx_panel_active is defined else true)
+  },
+  "2": {
+    "key": "2",
+    "name": ps.get("2", {}).get("name", "2 server"),
+    "active": ps.get("2", {}).get("active", true)
+  },
+  "3": {
+    "key": "3",
+    "name": ps.get("3", {}).get("name", "3 server"),
+    "active": ps.get("3", {}).get("active", true)
+  },
+  "4": {
+    "key": "4",
+    "name": ps.get("4", {}).get("name", "ZENEX"),
+    "active": ps.get("4", {}).get("active", true)
+  },
+  "5": {
+    "key": "5",
+    "name": ps.get("5", {}).get("name", "ZebraSMS"),
+    "active": ps.get("5", {}).get("active", true)
+  }
 } %}
 
 <h1 class="text-2xl font-bold mb-1">Get Number</h1>
@@ -12,7 +35,7 @@
 
 <!-- Panel Selector Tabs -->
 <div class="flex flex-wrap gap-2 mb-6" id="panel-tabs">
-  {% for pk in ["1", "2", "3"] %}
+  {% for pk in ["1", "2", "3", "4", "5"] %}
     {% set p_info = p_map.get(pk, {"key": pk, "name": pk ~ " server", "active": true}) %}
     <button type="button"
             data-panel="{{ pk }}"
@@ -59,19 +82,30 @@
 const SERVER_LABELS = {
   "1": "1 server",
   "2": "2 server",
-  "3": "3 server"
+  "3": "3 server",
+  "4": "ZENEX",
+  "5": "ZebraSMS"
 };
 
 const SERVER_ALIASES = {
   "1": "1",
   "2": "2",
   "3": "3",
+  "4": "4",
+  "5": "5",
   "sr 1": "1",
   "sr1": "1",
   "voltx": "1",
   "yehub": "2",
   "sl virtual": "3",
   "slvirtual": "3",
+  "zenex": "4",
+  "panel4": "4",
+  "panel_4": "4",
+  "zebrasms": "5",
+  "zebra sms": "5",
+  "panel5": "5",
+  "panel_5": "5",
   "1 server": "1",
   "2 server": "2",
   "3 server": "3",
@@ -82,6 +116,7 @@ const SERVER_ALIASES = {
 
 const SAVED_RANGE_KEY = 'saved_getnum_range';
 const PANELS_META = {{ p_map | tojson }};
+const PANEL_KEYS_ORDER = ['1', '2', '3', '4', '5'];
 const params = new URLSearchParams(window.location.search);
 const rangeInputEl = document.getElementById('range-input');
 
@@ -89,7 +124,7 @@ function normalizeServerKey(rawVal) {
   const raw = String(rawVal ?? '').trim().toLowerCase();
   if (!raw) return '';
   if (SERVER_ALIASES[raw]) return SERVER_ALIASES[raw];
-  const m = raw.match(/\b([123])\b/);
+  const m = raw.match(/\b([12345])\b/);
   return m ? m[1] : '';
 }
 
@@ -141,7 +176,7 @@ function getInitialPanel() {
     return saved;
   }
 
-  for (const k of ['1', '2', '3']) {
+  for (const k of PANEL_KEYS_ORDER) {
     if (PANELS_META[k] && PANELS_META[k].active) {
       return k;
     }
@@ -270,7 +305,7 @@ async function allocateNumber() {
   if (!input || !btn) return;
 
   const rangeVal = input.value.trim();
-  if (!rangeVal && currentPanel !== '3') return;
+  if (!rangeVal && !['3', '5'].includes(currentPanel)) return;
 
   if (rangeVal) {
     saveRangeToStorage(rangeVal);
