@@ -155,7 +155,9 @@
 </div>
 
 <!-- API Permission Modal -->
-<div id="apiPermissionModal" class="fixed inset-0 z-50 hidden bg-black/70 items-center justify-center p-4">
+<div id="apiPermissionModal"
+     onclick="if (event.target === this) closeApiPermissionModal()"
+     class="fixed inset-0 z-50 hidden bg-black/70 items-center justify-center p-4">
   <div class="card w-full max-w-md rounded-2xl p-5 space-y-4 border border-[#27312c]">
     <div class="flex items-center justify-between">
       <h3 id="apiPermTitle" class="text-base font-bold text-white">API Permission</h3>
@@ -165,7 +167,7 @@
       Enter the user's account email to activate API access. Once enabled, their API key will appear on their Profile page.
     </p>
     <form method="POST" action="{{ url_for('agent_api_permission') }}" class="space-y-3">
-      <select id="apiPermMode" name="mode"
+      <select id="apiPermMode" name="mode" onchange="syncApiPermissionCopy()"
               class="w-full px-3 py-2 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-xs text-gray-200">
         <option value="enable">Enable API Permission</option>
         <option value="disable">Disable API Permission</option>
@@ -187,15 +189,11 @@
 </div>
 
 <script>
-  function openApiPermissionModal(email = "", mode = "enable") {
-    const modal = document.getElementById("apiPermissionModal");
-    const emailInput = document.getElementById("apiPermEmail");
+  function syncApiPermissionCopy() {
     const modeSelect = document.getElementById("apiPermMode");
     const titleEl = document.getElementById("apiPermTitle");
     const descEl = document.getElementById("apiPermDesc");
-
-    if (emailInput) emailInput.value = email || "";
-    if (modeSelect) modeSelect.value = mode === "disable" ? "disable" : "enable";
+    const mode = modeSelect ? modeSelect.value : "enable";
 
     if (mode === "disable") {
       if (titleEl) titleEl.textContent = "Disable API Permission";
@@ -204,6 +202,16 @@
       if (titleEl) titleEl.textContent = "Grant API Permission";
       if (descEl) descEl.textContent = "Enter the user's account email to activate API access. Once enabled, their API key will appear on their Profile page.";
     }
+  }
+
+  function openApiPermissionModal(email = "", mode = "enable") {
+    const modal = document.getElementById("apiPermissionModal");
+    const emailInput = document.getElementById("apiPermEmail");
+    const modeSelect = document.getElementById("apiPermMode");
+
+    if (emailInput) emailInput.value = email || "";
+    if (modeSelect) modeSelect.value = mode === "disable" ? "disable" : "enable";
+    syncApiPermissionCopy();
 
     if (modal) {
       modal.classList.remove("hidden");
@@ -219,5 +227,11 @@
       modal.classList.remove("flex");
     }
   }
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      closeApiPermissionModal();
+    }
+  });
 </script>
 {% endblock %}
