@@ -1,10 +1,33 @@
 {% extends "base.html" %}
 {% block title %}{{ section.label }}{% endblock %}
 {% block content %}
+{% set ps = panels_status if panels_status is defined else {} %}
 {% set p_map = {
-  "1": {"key": "1", "name": "1 server", "active": voltx_panel_active if voltx_panel_active is defined else true},
-  "2": {"key": "2", "name": "2 server", "active": true},
-  "3": {"key": "3", "name": "3 server", "active": true}
+  "1": {
+    "key": "1",
+    "name": ps.get("1", {}).get("name", "1 server"),
+    "active": ps.get("1", {}).get("active", voltx_panel_active if voltx_panel_active is defined else true)
+  },
+  "2": {
+    "key": "2",
+    "name": ps.get("2", {}).get("name", "2 server"),
+    "active": ps.get("2", {}).get("active", true)
+  },
+  "3": {
+    "key": "3",
+    "name": ps.get("3", {}).get("name", "3 server"),
+    "active": ps.get("3", {}).get("active", true)
+  },
+  "4": {
+    "key": "4",
+    "name": ps.get("4", {}).get("name", "ZENEX"),
+    "active": ps.get("4", {}).get("active", true)
+  },
+  "5": {
+    "key": "5",
+    "name": ps.get("5", {}).get("name", "ZebraSMS"),
+    "active": ps.get("5", {}).get("active", true)
+  }
 } %}
 
 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-1">
@@ -15,7 +38,7 @@
 
 <!-- Panel Selector Tabs -->
 <div class="flex flex-wrap gap-2 mb-6" id="panel-tabs">
-  {% for pk in ["1", "2", "3"] %}
+  {% for pk in ["1", "2", "3", "4", "5"] %}
     {% set p_info = p_map.get(pk, {"key": pk, "name": pk ~ " server", "active": true}) %}
     <button type="button"
             data-panel="{{ pk }}"
@@ -34,6 +57,7 @@
 <script>
 const ACCESS_MAX_AGE_MS = 5 * 60 * 60 * 1000; // ৫ ঘণ্টার পুরনো ডেটা বাদ দেওয়া হবে
 const PANELS_META = {{ p_map | tojson }};
+const PANEL_KEYS_ORDER = ['1', '2', '3', '4', '5'];
 let accessTimer = null;
 
 function getInitialPanel() {
@@ -46,7 +70,7 @@ function getInitialPanel() {
   if (saved && PANELS_META[saved] && PANELS_META[saved].active) {
     return saved;
   }
-  for (const k of ['1', '2', '3']) {
+  for (const k of PANEL_KEYS_ORDER) {
     if (PANELS_META[k] && PANELS_META[k].active) {
       return k;
     }
