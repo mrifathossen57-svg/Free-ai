@@ -2554,9 +2554,15 @@ def bridge_console(user):
                 "data": {"hits": hits},
             })
         except Exception as e:
-            return jsonify({"meta": {"code": 500, "status": "error"}, "panel": p["key"], "message": str(e), "data": {"hits": []}})
+            return jsonify({
+                "meta": {"code": 500, "status": "error"},
+                "panel": p["key"],
+                "message": str(e),
+                "data": {"hits": []},
+            })
 
-    if not get_panel_active_flag("1"):
+    any_active = any(get_panel_active_flag(pk) for pk in MASTER_API_CONFIG["panel_order"])
+    if not any_active:
         return panel_off_json("1", 503)
 
     combined_hits, errors = _fetch_all_panels_console_hits()
@@ -2569,6 +2575,7 @@ def bridge_console(user):
         "errors": errors,
         "data": {"hits": combined_hits},
     })
+
 
 
 @app.route("/api/bridge/liveaccess")
