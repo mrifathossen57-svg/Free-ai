@@ -61,10 +61,37 @@ const SERVER_LABELS = {
   "2": "2 server",
   "3": "3 server"
 };
+
+const SERVER_ALIASES = {
+  "1": "1",
+  "2": "2",
+  "3": "3",
+  "sr 1": "1",
+  "sr1": "1",
+  "voltx": "1",
+  "yehub": "2",
+  "sl virtual": "3",
+  "slvirtual": "3",
+  "1 server": "1",
+  "2 server": "2",
+  "3 server": "3",
+  "server 1": "1",
+  "server 2": "2",
+  "server 3": "3"
+};
+
 const SAVED_RANGE_KEY = 'saved_getnum_range';
 const PANELS_META = {{ p_map | tojson }};
 const params = new URLSearchParams(window.location.search);
 const rangeInputEl = document.getElementById('range-input');
+
+function normalizeServerKey(rawVal) {
+  const raw = String(rawVal ?? '').trim().toLowerCase();
+  if (!raw) return '';
+  if (SERVER_ALIASES[raw]) return SERVER_ALIASES[raw];
+  const m = raw.match(/\b([123])\b/);
+  return m ? m[1] : '';
+}
 
 function saveRangeToStorage(val) {
   const trimmed = String(val ?? '').trim();
@@ -103,23 +130,28 @@ function initRangeValue() {
 }
 
 function getInitialPanel() {
-  const qPanel = params.get('panel');
+  const qPanel = normalizeServerKey(params.get('panel') || params.get('server'));
   if (qPanel && PANELS_META[qPanel] && PANELS_META[qPanel].active) {
+    localStorage.setItem('selected_panel_key', qPanel);
     return qPanel;
   }
-  const saved = localStorage.getItem('selected_panel_key');
+
+  const saved = normalizeServerKey(localStorage.getItem('selected_panel_key'));
   if (saved && PANELS_META[saved] && PANELS_META[saved].active) {
     return saved;
   }
+
   for (const k of ['1', '2', '3']) {
     if (PANELS_META[k] && PANELS_META[k].active) {
       return k;
     }
   }
+
   return qPanel || saved || '1';
 }
 
 let currentPanel = getInitialPanel();
+localStorage.setItem('selected_panel_key', currentPanel);
 
 function syncPanelUI() {
   const meta = PANELS_META[currentPanel] || { name: SERVER_LABELS[currentPanel] || `${currentPanel} server`, active: true };
@@ -152,7 +184,8 @@ function syncPanelUI() {
 }
 
 function selectPanel(panelKey) {
-  currentPanel = panelKey;
+  const normalized = normalizeServerKey(panelKey) || String(panelKey);
+  currentPanel = normalized;
   localStorage.setItem('selected_panel_key', currentPanel);
   const msg = document.getElementById('status-msg');
   if (msg) msg.classList.add('hidden');
@@ -187,18 +220,29 @@ function extractOtpValue(msg) {
   return match ? match[1] : text;
 }
 
-function copyText(txt, btn) {
-  const val = String(txt ?? '');
+function copySilent(txt) {
+  const val = String(txt ?? '').trim();
+  if (!val) return false;
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(val).catch(() => {});
-  } else {
+    return true;
+  }
+  try {
     const ta = document.createElement('textarea');
     ta.value = val;
     document.body.appendChild(ta);
     ta.select();
     document.execCommand('copy');
     document.body.removeChild(ta);
+    return true;
+  } catch (e) {
+    return false;
   }
+}
+
+function copyText(txt, btn) {
+  const val = String(txt ?? '');
+  copySilent(val);
   const old = btn.innerText;
   btn.innerText = 'Copied';
   setTimeout(() => btn.innerText = old, 1200);
@@ -232,6 +276,8 @@ async function allocateNumber() {
     saveRangeToStorage(rangeVal);
   }
 
+  const prevTopId = (cachedNumbers[0] && cachedNumbers[0].id) ? String(cachedNumbers[0].id) : '';
+
   btn.disabled = true;
   btn.innerText = 'Allocating...';
   if (msg) msg.classList.add('hidden');
@@ -255,14 +301,39 @@ async function allocateNumber() {
 
     if (!data.ok) {
       if (msg) {
+        msg.className = 'text-xs mt-3 text-amber-300';
         msg.innerText = data.message || 'Failed to get number.';
         msg.classList.remove('hidden');
       }
     } else {
       await refreshNumbers();
+
+      const itemFromApi = data.item || {};
+      const newestItem =
+        (itemFromApi.id && cachedNumbers.find(n => String(n.id) === String(itemFromApi.id))) ||
+        (cachedNumbers[0] && String(cachedNumbers[0].id) !== prevTopId ? cachedNumbers[0] : cachedNumbers[0]) ||
+        itemFromApi;
+
+      const numToCopy = String(
+        newestItem.no_plus_number ||
+        newestItem.full_number ||
+        itemFromApi.no_plus_number ||
+        itemFromApi.full_number ||
+        ''
+      ).trim();
+
+      if (numToCopy) {
+        copySilent(numToCopy);
+        if (msg) {
+          msg.className = 'text-xs mt-3 text-emerald-400 font-medium';
+          msg.innerText = `Generated & Auto-Copied: ${numToCopy}`;
+          msg.classList.remove('hidden');
+        }
+      }
     }
   } catch (e) {
     if (msg) {
+      msg.className = 'text-xs mt-3 text-amber-300';
       msg.innerText = 'Network error while requesting number.';
       msg.classList.remove('hidden');
     }
@@ -289,7 +360,7 @@ async function refreshNumbers() {
     }
     if (data.ok) {
       cachedNumbers = (data.numbers || []).map(n => {
-        const pKey = String(n.panel ?? n.panel_key ?? '');
+        const pKey = normalizeServerKey(n.panel ?? n.panel_key ?? '') || String(n.panel ?? n.panel_key ?? '');
         return {
           ...n,
           panel_name: SERVER_LABELS[pKey] || n.panel_name || (pKey ? `${pKey} server` : '')
