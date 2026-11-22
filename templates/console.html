@@ -86,6 +86,83 @@
     "server 3": "3 server"
   };
 
+  const SERVICE_KEYWORDS = [
+    { name: "WHATSAPP", patterns: [/\bwhatsapp\b/i] },
+    { name: "TELEGRAM", patterns: [/\btelegram\b/i] },
+    { name: "INSTAGRAM", patterns: [/\binstagram\b/i, /\binsta\b/i] },
+    { name: "FACEBOOK", patterns: [/\bfacebook\b/i, /\bfb\b/i, /\bmeta\b/i] },
+    { name: "TIKTOK", patterns: [/\btiktok\b/i, /\btik\s*tok\b/i] },
+    { name: "TWILIO", patterns: [/\btwilio\b/i] },
+    { name: "GOOGLE", patterns: [/\bgoogle\b/i, /\bgmail\b/i] },
+    { name: "TWITTER", patterns: [/\btwitter\b/i, /\bx\.com\b/i] },
+    { name: "DISCORD", patterns: [/\bdiscord\b/i] },
+    { name: "SNAPCHAT", patterns: [/\bsnapchat\b/i] },
+    { name: "AMAZON", patterns: [/\bamazon\b/i] },
+    { name: "MICROSOFT", patterns: [/\bmicrosoft\b/i, /\bhotmail\b/i, /\boutlook\b/i] }
+  ];
+
+  function resolveServiceName(h) {
+    const rawSid = String(h.sid ?? h.service ?? h.service_name ?? "").trim();
+    if (rawSid && rawSid.toUpperCase() !== "SERVICE") {
+      return rawSid;
+    }
+
+    const msg = String(h.message ?? h.sms ?? h.text ?? "").trim();
+    for (const item of SERVICE_KEYWORDS) {
+      if (item.patterns.some((rx) => rx.test(msg))) {
+        return item.name;
+      }
+    }
+
+    const fromMatch = msg.match(/\bfrom\s+([A-Za-z0-9._-]{2,20})\b/i);
+    if (fromMatch && fromMatch[1]) {
+      return fromMatch[1].toUpperCase();
+    }
+
+    return rawSid || "SERVICE";
+  }
+
+  function formatHitTime(h) {
+    const rawTime =
+      h.time ??
+      h.timestamp ??
+      h.created_at ??
+      h.createdAt ??
+      h.ts ??
+      h.date ??
+      "";
+
+    if (rawTime === null || rawTime === undefined || rawTime === "") {
+      return "";
+    }
+
+    // Jodi already HH:MM:SS ba HH:MM format-e thake
+    if (typeof rawTime === "string" && /^\d{1,2}:\d{2}(:\d{2})?(\s?(AM|PM))?$/i.test(rawTime.trim())) {
+      return rawTime.trim();
+    }
+
+    let d = null;
+    if (typeof rawTime === "number") {
+      // 10-digit seconds hole ms-e convert koro
+      const ms = rawTime < 1e12 ? rawTime * 1000 : rawTime;
+      d = new Date(ms);
+    } else {
+      const str = String(rawTime).trim();
+      if (/^\d+(\.\d+)?$/.test(str)) {
+        const num = Number(str);
+        d = new Date(num < 1e12 ? num * 1000 : num);
+      } else {
+        d = new Date(str);
+      }
+    }
+
+    if (!d || Number.isNaN(d.getTime())) {
+      return typeof rawTime === "string" ? rawTime : "";
+    }
+
+    return d.toLocaleTimeString();
+  }
+
   function resolveServerFromText(text) {
     const raw = String(text ?? "").trim();
     if (!raw) return { key: "", label: "" };
@@ -194,7 +271,7 @@
 
     const query = (input ? input.value : '').trim().toLowerCase();
     const filteredHits = query
-      ? latestHits.filter(h => String(h.sid || '').toLowerCase().includes(query))
+      ? latestHits.filter(h => resolveServiceName(h).toLowerCase().includes(query))
       : latestHits;
 
     if (!filteredHits.length) {
@@ -206,7 +283,8 @@
     }
 
     box.innerHTML = filteredHits.map(h => {
-      const t = h.time ? new Date(h.time).toLocaleTimeString() : '';
+      const serviceLabel = resolveServiceName(h);
+      const t = formatHitTime(h);
       const srv = detectHitServer(h);
       const serverText = srv.label
         ? `<span class="text-gray-400 font-medium">${escapeHtml(srv.label)}</span>`
@@ -217,9 +295,9 @@
         <div class="card rounded-2xl p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
           <div class="space-y-1">
             <div class="flex items-center gap-2 flex-wrap text-xs">
-              <span class="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 font-bold">${escapeHtml(h.sid || 'SERVICE')}</span>
+              <span class="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 font-bold">${escapeHtml(serviceLabel)}</span>
               <span class="font-mono text-amber-300 font-semibold">${escapeHtml(h.range || '')}</span>
-              <span class="text-gray-500">${escapeHtml(t)}</span>
+              ${t ? `<span class="text-gray-500">${escapeHtml(t)}</span>` : ''}
               ${serverText}
             </div>
             <div class="text-sm text-gray-200 break-all">→ ${escapeHtml(h.message || '')}</div>
