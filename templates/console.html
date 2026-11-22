@@ -2,7 +2,7 @@
 {% block title %}Live Console{% endblock %}
 {% block content %}
 {% set is_voltx_on = voltx_panel_active if voltx_panel_active is defined else true %}
-{% set panel_name = panel_brand_name if panel_brand_name is defined else "SR 1" %}
+{% set panel_name = panel_brand_name if panel_brand_name is defined else "1 server" %}
 
 <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
   <div>
@@ -11,7 +11,7 @@
       {% if is_voltx_on %}
         Global live feed of recent hits (Auto-refresh every 30s)
       {% else %}
-        {{ panel_name }} Panel is currently turned OFF by Admin
+        {{ panel_name }} is currently turned OFF by Admin
       {% endif %}
     </p>
   </div>
@@ -55,7 +55,7 @@
 
 {% if not is_voltx_on %}
   <div class="card rounded-2xl p-6 border border-rose-700/40 bg-rose-950/20 space-y-1">
-    <h2 class="text-base font-bold text-rose-300">{{ panel_name }} Panel is OFF</h2>
+    <h2 class="text-base font-bold text-rose-300">{{ panel_name }} is OFF</h2>
     <p class="text-xs text-gray-400">This panel has been turned off by Admin.</p>
   </div>
 {% else %}
@@ -67,6 +67,66 @@
   let consoleTimer = null;
   let latestHits = [];
   const panelName = {{ panel_name | tojson }};
+
+  const SERVER_NAME_MAP = {
+    "1": "1 server",
+    "2": "2 server",
+    "3": "3 server",
+    "sr 1": "1 server",
+    "sr1": "1 server",
+    "voltx": "1 server",
+    "yehub": "2 server",
+    "sl virtual": "3 server",
+    "slvirtual": "3 server",
+    "1 server": "1 server",
+    "2 server": "2 server",
+    "3 server": "3 server",
+    "server 1": "1 server",
+    "server 2": "2 server",
+    "server 3": "3 server"
+  };
+
+  function detectHitServer(h) {
+    const raw = String(
+      h.panel ??
+      h.panel_key ??
+      h.panelKey ??
+      h.panel_id ??
+      h.server ??
+      h.server_id ??
+      h.source ??
+      h.panel_name ??
+      h.panelName ??
+      ""
+    ).trim();
+
+    if (!raw) {
+      return { key: "", label: "" };
+    }
+
+    const lower = raw.toLowerCase();
+    if (SERVER_NAME_MAP[lower]) {
+      const label = SERVER_NAME_MAP[lower];
+      const key = label.startsWith("1") ? "1" : label.startsWith("2") ? "2" : label.startsWith("3") ? "3" : "";
+      return { key, label };
+    }
+
+    const numMatch = lower.match(/\b([123])\b/);
+    if (numMatch) {
+      return { key: numMatch[1], label: `${numMatch[1]} server` };
+    }
+
+    return { key: "", label: raw };
+  }
+
+  function escapeHtml(str) {
+    return String(str ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
 
   function toggleServiceSearch() {
     const box = document.getElementById('service-search-box');
@@ -112,7 +172,7 @@
 
     if (!filteredHits.length) {
       const emptyMsg = query
-        ? `No recent hits found for "${input.value.trim()}".`
+        ? `No recent hits found for "${escapeHtml(input.value.trim())}".`
         : 'No recent hits found.';
       box.innerHTML = `<div class="card rounded-2xl p-5 text-sm text-gray-400">${emptyMsg}</div>`;
       return;
@@ -120,22 +180,29 @@
 
     box.innerHTML = filteredHits.map(h => {
       const t = h.time ? new Date(h.time).toLocaleTimeString() : '';
+      const srv = detectHitServer(h);
+      const serverBadge = srv.label
+        ? `<span class="px-2 py-0.5 rounded-md bg-sky-950/80 text-sky-300 border border-sky-700/40 font-semibold">${escapeHtml(srv.label)}</span>`
+        : '';
+      const useRangeUrl = `/page/get-number?range=${encodeURIComponent(h.range || '')}${srv.key ? `&panel=${encodeURIComponent(srv.key)}` : ''}`;
+
       return `
         <div class="card rounded-2xl p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
           <div class="space-y-1">
-            <div class="flex items-center gap-2 text-xs">
-              <span class="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 font-bold">${h.sid || 'SERVICE'}</span>
-              <span class="font-mono text-amber-300 font-semibold">${h.range || ''}</span>
-              <span class="text-gray-500">${t}</span>
+            <div class="flex items-center gap-2 flex-wrap text-xs">
+              <span class="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 font-bold">${escapeHtml(h.sid || 'SERVICE')}</span>
+              <span class="font-mono text-amber-300 font-semibold">${escapeHtml(h.range || '')}</span>
+              <span class="text-gray-500">${escapeHtml(t)}</span>
+              ${serverBadge}
             </div>
-            <div class="text-sm text-gray-200 break-all">→ ${h.message || ''}</div>
+            <div class="text-sm text-gray-200 break-all">→ ${escapeHtml(h.message || '')}</div>
           </div>
           <div class="flex items-center gap-2 shrink-0">
-            <button onclick="copyRange('${h.range}', this)"
+            <button onclick="copyRange('${escapeHtml(h.range || '')}', this)"
                     class="px-3 py-1.5 rounded-xl bg-[#1a221e] hover:bg-[#24302a] text-xs text-emerald-300 border border-emerald-800/40">
               Copy Range
             </button>
-            <a href="/page/get-number?range=${encodeURIComponent(h.range || '')}"
+            <a href="${useRangeUrl}"
                class="px-3 py-1.5 rounded-xl accent-btn text-xs text-white font-semibold">
               Use Range →
             </a>
@@ -154,8 +221,8 @@
     if (box) {
       box.innerHTML = `
         <div class="card rounded-2xl p-6 border border-rose-700/40 bg-rose-950/20 space-y-1">
-          <div class="text-base font-bold text-rose-300">${panelName} Panel is OFF</div>
-          <div class="text-xs text-gray-400">${msg}</div>
+          <div class="text-base font-bold text-rose-300">${escapeHtml(panelName)} is OFF</div>
+          <div class="text-xs text-gray-400">${escapeHtml(msg)}</div>
         </div>
       `;
     }
