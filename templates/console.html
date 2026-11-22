@@ -72,12 +72,21 @@
     "1": "1 server",
     "2": "2 server",
     "3": "3 server",
+    "4": "ZENEX",
+    "5": "ZebraSMS",
     "sr 1": "1 server",
     "sr1": "1 server",
     "voltx": "1 server",
     "yehub": "2 server",
     "sl virtual": "3 server",
     "slvirtual": "3 server",
+    "zenex": "ZENEX",
+    "panel4": "ZENEX",
+    "panel_4": "ZENEX",
+    "zebrasms": "ZebraSMS",
+    "zebra sms": "ZebraSMS",
+    "panel5": "ZebraSMS",
+    "panel_5": "ZebraSMS",
     "1 server": "1 server",
     "2 server": "2 server",
     "3 server": "3 server",
@@ -198,21 +207,33 @@
     const lower = raw.toLowerCase();
     if (SERVER_NAME_MAP[lower]) {
       const label = SERVER_NAME_MAP[lower];
-      const key = label.startsWith("1") ? "1" : label.startsWith("2") ? "2" : label.startsWith("3") ? "3" : "";
+      const key =
+        label.startsWith("1") ? "1" :
+        label.startsWith("2") ? "2" :
+        label.startsWith("3") ? "3" :
+        label.toLowerCase() === "zenex" ? "4" :
+        label.toLowerCase() === "zebrasms" ? "5" : "";
       return { key, label };
     }
 
     for (const alias of Object.keys(SERVER_NAME_MAP)) {
       if (lower.includes(alias)) {
         const label = SERVER_NAME_MAP[alias];
-        const key = label.startsWith("1") ? "1" : label.startsWith("2") ? "2" : label.startsWith("3") ? "3" : "";
+        const key =
+          label.startsWith("1") ? "1" :
+          label.startsWith("2") ? "2" :
+          label.startsWith("3") ? "3" :
+          label.toLowerCase() === "zenex" ? "4" :
+          label.toLowerCase() === "zebrasms" ? "5" : "";
         return { key, label };
       }
     }
 
-    const numMatch = lower.match(/\b([123])\b/);
+    const numMatch = lower.match(/\b([12345])\b/);
     if (numMatch) {
-      return { key: numMatch[1], label: `${numMatch[1]} server` };
+      const k = numMatch[1];
+      const label = k === "4" ? "ZENEX" : k === "5" ? "ZebraSMS" : `${k} server`;
+      return { key: k, label };
     }
 
     return { key: "", label: "" };
@@ -222,10 +243,14 @@
     const directName = String(h.panel_name ?? h.panelName ?? "").trim();
     const directKey = String(h.panel ?? h.panel_key ?? h.panelKey ?? "").trim();
 
-    if (directKey && ["1", "2", "3"].includes(directKey)) {
+    if (directKey && ["1", "2", "3", "4", "5"].includes(directKey)) {
+      const fallbackLabel =
+        directKey === "4" ? "ZENEX" :
+        directKey === "5" ? "ZebraSMS" :
+        `${directKey} server`;
       return {
         key: directKey,
-        label: directName || `${directKey} server`
+        label: directName || fallbackLabel
       };
     }
 
