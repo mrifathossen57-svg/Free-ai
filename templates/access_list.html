@@ -1,11 +1,10 @@
 {% extends "base.html" %}
 {% block title %}{{ section.label }}{% endblock %}
 {% block content %}
-{% set panel_name = panel_brand_name if panel_brand_name is defined else "SR 1" %}
-{% set p_map = panels_status if panels_status is defined else {
-  "1": {"key": "1", "name": panel_name, "active": voltx_panel_active if voltx_panel_active is defined else true},
-  "2": {"key": "2", "name": "YEHUB", "active": true},
-  "3": {"key": "3", "name": "SL Virtual", "active": true}
+{% set p_map = {
+  "1": {"key": "1", "name": "1 server", "active": voltx_panel_active if voltx_panel_active is defined else true},
+  "2": {"key": "2", "name": "2 server", "active": true},
+  "3": {"key": "3", "name": "3 server", "active": true}
 } %}
 
 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-1">
@@ -17,7 +16,7 @@
 <!-- Panel Selector Tabs -->
 <div class="flex flex-wrap gap-2 mb-6" id="panel-tabs">
   {% for pk in ["1", "2", "3"] %}
-    {% set p_info = p_map.get(pk, {"key": pk, "name": "Panel " ~ pk, "active": true}) %}
+    {% set p_info = p_map.get(pk, {"key": pk, "name": pk ~ " server", "active": true}) %}
     <button type="button"
             data-panel="{{ pk }}"
             onclick="selectPanel('{{ pk }}')"
@@ -97,11 +96,11 @@ function formatTime(val) {
 
 function renderAccessOff(msg = 'This panel has been turned off by Admin.') {
   const box = document.getElementById('access-box');
-  const pName = (PANELS_META[currentPanel] && PANELS_META[currentPanel].name) || `Panel ${currentPanel}`;
+  const pName = (PANELS_META[currentPanel] && PANELS_META[currentPanel].name) || `${currentPanel} server`;
   if (box) {
     box.innerHTML = `
       <div class="card rounded-2xl p-6 border border-rose-700/40 bg-rose-950/20 space-y-1">
-        <div class="text-base font-bold text-rose-300">${pName} Panel is OFF</div>
+        <div class="text-base font-bold text-rose-300">${pName} is OFF</div>
         <div class="text-xs text-gray-400">${msg}</div>
       </div>
     `;
