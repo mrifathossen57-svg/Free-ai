@@ -86,23 +86,9 @@
     "server 3": "3 server"
   };
 
-  function detectHitServer(h) {
-    const raw = String(
-      h.panel ??
-      h.panel_key ??
-      h.panelKey ??
-      h.panel_id ??
-      h.server ??
-      h.server_id ??
-      h.source ??
-      h.panel_name ??
-      h.panelName ??
-      ""
-    ).trim();
-
-    if (!raw) {
-      return { key: "", label: "" };
-    }
+  function resolveServerFromText(text) {
+    const raw = String(text ?? "").trim();
+    if (!raw) return { key: "", label: "" };
 
     const lower = raw.toLowerCase();
     if (SERVER_NAME_MAP[lower]) {
@@ -111,12 +97,53 @@
       return { key, label };
     }
 
+    for (const alias of Object.keys(SERVER_NAME_MAP)) {
+      if (lower.includes(alias)) {
+        const label = SERVER_NAME_MAP[alias];
+        const key = label.startsWith("1") ? "1" : label.startsWith("2") ? "2" : label.startsWith("3") ? "3" : "";
+        return { key, label };
+      }
+    }
+
     const numMatch = lower.match(/\b([123])\b/);
     if (numMatch) {
       return { key: numMatch[1], label: `${numMatch[1]} server` };
     }
 
-    return { key: "", label: raw };
+    return { key: "", label: "" };
+  }
+
+  function detectHitServer(h) {
+    const directName = String(h.panel_name ?? h.panelName ?? "").trim();
+    const directKey = String(h.panel ?? h.panel_key ?? h.panelKey ?? "").trim();
+
+    if (directKey && ["1", "2", "3"].includes(directKey)) {
+      return {
+        key: directKey,
+        label: directName || `${directKey} server`
+      };
+    }
+
+    const raw = String(
+      directName ||
+      directKey ||
+      h.panel_id ||
+      h.server ||
+      h.server_id ||
+      h.source ||
+      ""
+    ).trim();
+
+    if (raw) {
+      const parsed = resolveServerFromText(raw);
+      if (parsed.label) return parsed;
+      return { key: "", label: raw };
+    }
+
+    const fromMsg = resolveServerFromText(h.message || "");
+    if (fromMsg.label) return fromMsg;
+
+    return { key: "1", label: panelName || "1 server" };
   }
 
   function escapeHtml(str) {
@@ -181,10 +208,10 @@
     box.innerHTML = filteredHits.map(h => {
       const t = h.time ? new Date(h.time).toLocaleTimeString() : '';
       const srv = detectHitServer(h);
-      const serverBadge = srv.label
-        ? `<span class="px-2 py-0.5 rounded-md bg-sky-950/80 text-sky-300 border border-sky-700/40 font-semibold">${escapeHtml(srv.label)}</span>`
+      const serverText = srv.label
+        ? `<span class="text-gray-400 font-medium">${escapeHtml(srv.label)}</span>`
         : '';
-      const useRangeUrl = `/page/get-number?range=${encodeURIComponent(h.range || '')}${srv.key ? `&panel=${encodeURIComponent(srv.key)}` : ''}`;
+      const useRangeUrl = `/page/get-number?range=${encodeURIComponent(h.range || '')}${srv.key ? `&panel=${encodeURIComponent(srv.key)}&server=${encodeURIComponent(srv.key)}` : ''}`;
 
       return `
         <div class="card rounded-2xl p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
@@ -193,7 +220,7 @@
               <span class="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 font-bold">${escapeHtml(h.sid || 'SERVICE')}</span>
               <span class="font-mono text-amber-300 font-semibold">${escapeHtml(h.range || '')}</span>
               <span class="text-gray-500">${escapeHtml(t)}</span>
-              ${serverBadge}
+              ${serverText}
             </div>
             <div class="text-sm text-gray-200 break-all">→ ${escapeHtml(h.message || '')}</div>
           </div>
