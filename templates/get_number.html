@@ -31,10 +31,18 @@
 } %}
 
 <h1 class="text-2xl font-bold mb-1">Get Number</h1>
-<p class="text-sm text-gray-400 mb-4">Select an active panel and paste range (e.g. 22501XXX) to allocate a number. Numbers auto-expire after 15 minutes.</p>
+<p class="text-sm text-gray-400 mb-4">Select an active server (or Master Auto) and enter range (e.g. 22501XXX) to get a number. Numbers auto-expire after 15 minutes.</p>
 
 <!-- Panel Selector Tabs -->
 <div class="flex flex-wrap gap-2 mb-6" id="panel-tabs">
+  <button type="button"
+          data-panel="master"
+          onclick="selectPanel('master')"
+          class="panel-tab px-4 py-2 rounded-xl text-xs font-semibold border transition flex items-center gap-2 bg-[#141916] border-[#242e28] text-gray-300 hover:border-emerald-500/50">
+    <span>Master Auto (1–5)</span>
+    <span class="inline-block w-2 h-2 rounded-full bg-emerald-400"></span>
+  </button>
+
   {% for pk in ["1", "2", "3", "4", "5"] %}
     {% set p_info = p_map.get(pk, {"key": pk, "name": pk ~ " server", "active": true}) %}
     <button type="button"
@@ -60,6 +68,7 @@
   <div class="flex flex-col sm:flex-row gap-3">
     <input id="range-input" type="text" placeholder="# 22501XXX or 26134"
            oninput="saveRangeToStorage(this.value)"
+           onkeydown="if(event.key==='Enter'){event.preventDefault();allocateNumber();}"
            class="flex-1 px-4 py-3 rounded-xl bg-[#0b0e0c] border border-[#242d28] text-white font-mono text-sm focus:outline-none focus:border-emerald-500" />
     <div class="flex gap-2 shrink-0">
       <button type="button" id="clear-range-btn" onclick="clearSavedRange()"
@@ -80,6 +89,7 @@
 
 <script>
 const SERVER_LABELS = {
+  "master": "Master Auto (1–5)",
   "1": "1 server",
   "2": "2 server",
   "3": "3 server",
@@ -88,6 +98,9 @@ const SERVER_LABELS = {
 };
 
 const SERVER_ALIASES = {
+  "master": "master",
+  "auto": "master",
+  "all": "master",
   "1": "1",
   "2": "2",
   "3": "3",
@@ -170,12 +183,19 @@ function initRangeValue() {
 
 function getInitialPanel() {
   const qPanel = normalizeServerKey(params.get('panel') || params.get('server'));
+  if (qPanel === 'master') {
+    localStorage.setItem('selected_panel_key', 'master');
+    return 'master';
+  }
   if (qPanel && PANELS_META[qPanel] && PANELS_META[qPanel].active) {
     localStorage.setItem('selected_panel_key', qPanel);
     return qPanel;
   }
 
   const saved = normalizeServerKey(localStorage.getItem('selected_panel_key'));
+  if (saved === 'master') {
+    return 'master';
+  }
   if (saved && PANELS_META[saved] && PANELS_META[saved].active) {
     return saved;
   }
@@ -186,14 +206,18 @@ function getInitialPanel() {
     }
   }
 
-  return qPanel || saved || '1';
+  return qPanel || saved || 'master';
 }
 
 let currentPanel = getInitialPanel();
 localStorage.setItem('selected_panel_key', currentPanel);
 
 function syncPanelUI() {
-  const meta = PANELS_META[currentPanel] || { name: SERVER_LABELS[currentPanel] || `${currentPanel} server`, active: true };
+  const isMaster = currentPanel === 'master';
+  const meta = isMaster
+    ? { name: SERVER_LABELS.master, active: true }
+    : (PANELS_META[currentPanel] || { name: SERVER_LABELS[currentPanel] || `${currentPanel} server`, active: true });
+
   document.querySelectorAll('.panel-tab').forEach(btn => {
     const k = btn.getAttribute('data-panel');
     if (k === currentPanel) {
@@ -211,9 +235,9 @@ function syncPanelUI() {
   const offTitle = document.getElementById('getnum-off-title');
   const offMsg = document.getElementById('getnum-off-msg');
 
-  if (!meta.active) {
+  if (!isMaster && !meta.active) {
     if (offTitle) offTitle.innerText = `${meta.name} is OFF`;
-    if (offMsg) offMsg.innerText = `${meta.name} has been turned off by Admin. Select another active server above.`;
+    if (offMsg) offMsg.innerText = `${meta.name} has been turned off by Admin. Select another active server or Master Auto above.`;
     if (banner) banner.classList.remove('hidden');
     if (formCard) formCard.classList.add('hidden');
   } else {
@@ -309,7 +333,14 @@ async function allocateNumber() {
   if (!input || !btn) return;
 
   const rangeVal = input.value.trim();
-  if (!rangeVal && !['3', '5'].includes(currentPanel)) return;
+  if (!rangeVal && !['3', '4', '5'].includes(currentPanel)) {
+    if (msg) {
+      msg.className = 'text-xs mt-3 text-amber-300';
+      msg.innerText = 'Please enter a number range first.';
+      msg.classList.remove('hidden');
+    }
+    return;
+  }
 
   if (rangeVal) {
     saveRangeToStorage(rangeVal);
@@ -330,9 +361,11 @@ async function allocateNumber() {
     const data = await res.json();
 
     if (
-      data.panel_active === false ||
-      (currentPanel === '1' && data.voltx_active === false) ||
-      (data.meta && data.meta.code === 503)
+      currentPanel !== 'master' && (
+        data.panel_active === false ||
+        (currentPanel === '1' && data.voltx_active === false) ||
+        (data.meta && data.meta.code === 503)
+      )
     ) {
       showGetnumPanelOff(data.message || 'This server has been turned off by Admin.');
       return;
@@ -361,11 +394,13 @@ async function allocateNumber() {
         ''
       ).trim();
 
+      const srvLabel = data.matched_panel_name || newestItem.panel_name || itemFromApi.panel_name || '';
+
       if (numToCopy) {
         copySilent(numToCopy);
         if (msg) {
           msg.className = 'text-xs mt-3 text-emerald-400 font-medium';
-          msg.innerText = `Generated & Auto-Copied: ${numToCopy}`;
+          msg.innerText = `Generated & Auto-Copied: ${numToCopy}${srvLabel ? ` (${srvLabel})` : ''}`;
           msg.classList.remove('hidden');
         }
       }
@@ -445,7 +480,7 @@ function renderNumbers() {
          </div>`
       : (n.expired
           ? `<div class="text-xs text-rose-400">No OTP received within 15 minutes.</div>`
-          : `<div class="text-xs text-gray-400 animate-pulse">Waiting for incoming OTP...</div>`);
+          : `<div class="text-xs text-gray-400 animate-pulse">Background OTP listener active...</div>`);
 
     return `
       <div class="card rounded-2xl p-4 grid grid-cols-1 md:grid-cols-2 gap-4 items-center ${n.expired ? 'opacity-60' : ''}">
