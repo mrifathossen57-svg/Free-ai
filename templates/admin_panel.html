@@ -1,7 +1,6 @@
 {% extends "base.html" %}
 {% block title %}SR Admin Control Panel{% endblock %}
 {% block content %}
-{% set panel_name = panel_brand_name if panel_brand_name is defined else "SR 1" %}
 <div class="max-w-5xl mx-auto space-y-8">
   <div class="flex items-center justify-between">
     <div>
@@ -36,9 +35,9 @@
   <!-- 3 Panels Independent Active Switches -->
   <div class="space-y-4">
     {% set panels_ui = [
-      {"key": "1", "title": panel_name, "active": voltx_panel_active},
-      {"key": "2", "title": "YEHUB", "active": panel_2_active if panel_2_active is defined else true},
-      {"key": "3", "title": "SL Virtual", "active": panel_3_active if panel_3_active is defined else true}
+      {"key": "1", "title": "1 server", "active": voltx_panel_active},
+      {"key": "2", "title": "2 server", "active": panel_2_active if panel_2_active is defined else true},
+      {"key": "3", "title": "3 server", "active": panel_3_active if panel_3_active is defined else true}
     ] %}
 
     {% for p in panels_ui %}
