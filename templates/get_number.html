@@ -5,27 +5,27 @@
 {% set p_map = {
   "1": {
     "key": "1",
-    "name": ps.get("1", {}).get("name", "1 server"),
+    "name": "1 server",
     "active": ps.get("1", {}).get("active", voltx_panel_active if voltx_panel_active is defined else true)
   },
   "2": {
     "key": "2",
-    "name": ps.get("2", {}).get("name", "2 server"),
+    "name": "2 server",
     "active": ps.get("2", {}).get("active", true)
   },
   "3": {
     "key": "3",
-    "name": ps.get("3", {}).get("name", "3 server"),
+    "name": "3 server",
     "active": ps.get("3", {}).get("active", true)
   },
   "4": {
     "key": "4",
-    "name": ps.get("4", {}).get("name", "ZENEX"),
+    "name": "4 server",
     "active": ps.get("4", {}).get("active", true)
   },
   "5": {
     "key": "5",
-    "name": ps.get("5", {}).get("name", "ZebraSMS"),
+    "name": "5 server",
     "active": ps.get("5", {}).get("active", true)
   }
 } %}
@@ -83,8 +83,8 @@ const SERVER_LABELS = {
   "1": "1 server",
   "2": "2 server",
   "3": "3 server",
-  "4": "ZENEX",
-  "5": "ZebraSMS"
+  "4": "4 server",
+  "5": "5 server"
 };
 
 const SERVER_ALIASES = {
@@ -109,9 +109,13 @@ const SERVER_ALIASES = {
   "1 server": "1",
   "2 server": "2",
   "3 server": "3",
+  "4 server": "4",
+  "5 server": "5",
   "server 1": "1",
   "server 2": "2",
-  "server 3": "3"
+  "server 3": "3",
+  "server 4": "4",
+  "server 5": "5"
 };
 
 const SAVED_RANGE_KEY = 'saved_getnum_range';
@@ -388,7 +392,7 @@ async function refreshNumbers() {
       for (const [k, v] of Object.entries(data.panels)) {
         PANELS_META[k] = {
           ...v,
-          name: SERVER_LABELS[k] || v.name || `${k} server`
+          name: SERVER_LABELS[k] || `${k} server`
         };
       }
       syncPanelUI();
@@ -398,7 +402,7 @@ async function refreshNumbers() {
         const pKey = normalizeServerKey(n.panel ?? n.panel_key ?? '') || String(n.panel ?? n.panel_key ?? '');
         return {
           ...n,
-          panel_name: SERVER_LABELS[pKey] || n.panel_name || (pKey ? `${pKey} server` : '')
+          panel_name: SERVER_LABELS[pKey] || (pKey ? `${pKey} server` : '')
         };
       });
       renderNumbers();
