@@ -37,14 +37,13 @@
     </div>
   </div>
 
-  <!-- 5 Panels Status Strip -->
+  <!-- 5 Panels Status Strip (Panel names hidden) -->
   <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
     {% for pk in ["1", "2", "3", "4", "5"] %}
-      {% set p_info = p_map.get(pk, {"key": pk, "name": pk ~ " server", "active": true}) %}
+      {% set p_info = p_map.get(pk, {"key": pk, "active": true}) %}
       <div class="card rounded-2xl p-3.5 flex items-center justify-between gap-2">
         <div class="min-w-0">
-          <div class="text-[11px] text-gray-400 font-mono">Server {{ pk }}</div>
-          <div class="text-sm font-bold text-white truncate">{{ p_info.name }}</div>
+          <div class="text-xs font-semibold text-gray-200 font-mono">Server {{ pk }}</div>
         </div>
         {% if p_info.active %}
           <span class="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-950 text-emerald-400 border border-emerald-700/40 shrink-0">ON</span>
@@ -186,62 +185,64 @@ print(res.json())</pre>
         </div>
       </section>
 
-      <!-- User Bot Starter Template -->
-      <section id="user-bot" class="card rounded-2xl p-5 space-y-3 scroll-mt-6">
+      <!-- User Bot Starter Template + Quick Launcher -->
+      <section id="user-bot" class="card rounded-2xl p-5 space-y-4 scroll-mt-6">
         <div class="flex items-center justify-between gap-2 flex-wrap">
           <div>
             <h2 class="text-lg font-bold">Build Your Own Bot with Master API</h2>
             <p class="text-xs text-gray-400 mt-0.5">
-              Users can plug their own <code class="text-emerald-300">USER_API_KEY</code> into this bot script to request numbers by range across all 5 panels and check OTPs.
+              On <code class="text-emerald-300">/start</code>, shows server countries/ranges; clicking a country sends a number via <code class="text-emerald-300">/getnum</code> and forwards <code class="text-emerald-300">/console</code> hits to <code class="text-emerald-300">Chat ID</code>.
             </p>
           </div>
-          <button type="button" onclick="copyText('botStarterCode', 'Bot template copied!')"
-                  class="px-3 py-1 rounded-lg bg-[#181f1b] hover:bg-[#222c26] border border-[#2a3630] text-xs font-semibold text-gray-200">
-            Copy Bot Code
-          </button>
+          <div class="flex items-center gap-2">
+            <span id="botRunStatus" class="px-2.5 py-1 rounded-full text-xs font-mono bg-[#181f1b] text-gray-300 border border-[#27312c]">
+              Idle
+            </span>
+            <button type="button" onclick="copyText('botStarterCode', 'Bot template copied!')"
+                    class="px-3 py-1 rounded-lg bg-[#181f1b] hover:bg-[#222c26] border border-[#2a3630] text-xs font-semibold text-gray-200">
+              Copy Bot Code
+            </button>
+          </div>
         </div>
 
-        <pre id="botStarterCode" class="p-3.5 rounded-xl bg-[#0b0e0c] border border-[#202824] font-mono text-[11px] text-gray-200 overflow-x-auto">import requests
-from telebot import TeleBot
+        <!-- Bot Token + Chat ID + Run Bot Setup -->
+        <div class="p-3.5 rounded-xl bg-[#0b0e0c] border border-[#222b26] space-y-3">
+          <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+            <div class="md:col-span-5">
+              <label class="block text-xs text-gray-400 mb-1">Bot Token</label>
+              <input id="botTokenInput" type="text" oninput="syncBotStarterCode()"
+                     placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
+                     class="w-full px-3 py-2 rounded-xl bg-[#111613] border border-[#242e29] font-mono text-xs text-emerald-300 focus:outline-none focus:border-emerald-500" />
+            </div>
 
-BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
-API_BASE = "{{ site_base }}"
-USER_API_KEY = "YOUR_USER_API_KEY"
+            <div class="md:col-span-4">
+              <label class="block text-xs text-gray-400 mb-1">Chat ID (Live Console Forward)</label>
+              <input id="botChatIdInput" type="text" oninput="syncBotStarterCode()"
+                     placeholder="-1001234567890 or 123456789"
+                     class="w-full px-3 py-2 rounded-xl bg-[#111613] border border-[#242e29] font-mono text-xs text-sky-300 focus:outline-none focus:border-emerald-500" />
+            </div>
 
-bot = TeleBot(BOT_TOKEN)
-HEADERS = {"mauthapi": USER_API_KEY, "Content-Type": "application/json"}
+            <div class="md:col-span-3">
+              <button type="button" id="runBotBtn" onclick="runUserBot()"
+                      class="w-full px-4 py-2 rounded-xl accent-btn text-white font-semibold text-xs sm:text-sm transition">
+                Run Bot
+              </button>
+            </div>
+          </div>
 
-@bot.message_handler(commands=["otp"])
-def otp_cmd(msg):
-    r = requests.get(f"{API_BASE}/success-otp", headers=HEADERS, timeout=15).json()
-    otps = ((r.get("data") or {}).get("otps") or [])[:5]
-    if not otps:
-        bot.reply_to(msg, "No OTPs found yet.")
-        return
-    out = "\n\n".join([f"{o.get('number')} -> {o.get('message')}" for o in otps])
-    bot.reply_to(msg, out)
+          <div class="flex flex-wrap items-center justify-between gap-2 text-[11px] text-gray-400 pt-1 border-t border-[#1b221e]">
+            <div>
+              Auto API Base: <code id="botAutoApiBase" class="text-emerald-300">{{ site_base }}</code>
+            </div>
+            <div>
+              Auto API Key: <code id="botAutoApiKey" class="text-amber-300">From Playground / Profile</code>
+            </div>
+          </div>
 
-@bot.message_handler(commands=["live"])
-def live_cmd(msg):
-    r = requests.get(f"{API_BASE}/liveaccess", headers=HEADERS, timeout=15).json()
-    svcs = ((r.get("data") or {}).get("services") or [])[:5]
-    if not svcs:
-        bot.reply_to(msg, "No live access ranges found.")
-        return
-    out = "\n".join([f"{s.get('sid')}: {', '.join((s.get('ranges') or [])[:5])}" for s in svcs])
-    bot.reply_to(msg, out)
+          <pre id="botRunnerOutput" class="p-2.5 rounded-lg bg-[#070908] border border-[#1c231f] font-mono text-[11px] text-gray-300 overflow-x-auto">Paste Bot Token &amp; Chat ID, then click Run Bot to launch with your Master API config.</pre>
+        </div>
 
-@bot.message_handler(func=lambda m: bool(m.text and not m.text.startswith("/")))
-def range_cmd(msg):
-    rng = msg.text.strip()
-    r = requests.post(f"{API_BASE}/getnum", headers=HEADERS, json={"range": rng}, timeout=25).json()
-    if (r.get("meta") or {}).get("code") == 200:
-        d = r.get("data") or {}
-        bot.reply_to(msg, f"Number: {d.get('full_number')}\nServer: {r.get('matched_panel_name', '')}\nRange: {d.get('range', rng)}")
-    else:
-        bot.reply_to(msg, f"Failed: {r.get('message', 'Out of stock')}")
-
-bot.infinity_polling(skip_pending=True)</pre>
+        <pre id="botStarterCode" class="p-3.5 rounded-xl bg-[#0b0e0c] border border-[#202824] font-mono text-[11px] text-gray-200 overflow-x-auto"></pre>
       </section>
 
       <!-- Live Playground -->
@@ -261,7 +262,9 @@ bot.infinity_polling(skip_pending=True)</pre>
         <div>
           <label class="block text-xs text-gray-400 mb-1.5">API Key (<span class="font-mono text-emerald-300">mauthapi</span>)</label>
           <div class="flex flex-col sm:flex-row gap-2">
-            <input id="pgApiKey" type="text" value="{{ user.api_key_visible if user and user.api_key_visible else '' }}" placeholder="Paste your user API key here..."
+            <input id="pgApiKey" type="text" oninput="syncBotStarterCode()"
+                   value="{{ user.api_key_visible if user and user.api_key_visible else '' }}"
+                   placeholder="Paste your user API key here..."
                    class="flex-1 px-3.5 py-2.5 rounded-xl bg-[#0b0e0c] border border-[#242e29] font-mono text-xs sm:text-sm text-amber-300 focus:outline-none focus:border-emerald-500" />
             {% if user %}
               <a href="{{ url_for('section_page', section_key='profile') }}"
@@ -347,6 +350,217 @@ bot.infinity_polling(skip_pending=True)</pre>
     navigator.clipboard?.writeText(text).then(() => showToast(toastMsg)).catch(() => showToast("Copy failed"));
   }
 
+  function getActiveApiKey() {
+    const pgKey = document.getElementById("pgApiKey")?.value.trim();
+    return pgKey || "YOUR_USER_API_KEY";
+  }
+
+  function syncBotStarterCode() {
+    const token = (document.getElementById("botTokenInput")?.value || "").trim() || "YOUR_TELEGRAM_BOT_TOKEN";
+    const chatId = (document.getElementById("botChatIdInput")?.value || "").trim() || "YOUR_CONSOLE_CHAT_ID";
+    const apiKey = getActiveApiKey();
+
+    const keyLabel = document.getElementById("botAutoApiKey");
+    if (keyLabel) {
+      keyLabel.textContent = apiKey === "YOUR_USER_API_KEY" ? "Not set yet" : `${apiKey.slice(0, 6)}...${apiKey.slice(-4)}`;
+    }
+
+    const codeEl = document.getElementById("botStarterCode");
+    if (!codeEl) return;
+
+    codeEl.textContent = `import time
+import threading
+import requests
+from telebot import TeleBot, types
+
+BOT_TOKEN = "${token}"
+CONSOLE_CHAT_ID = "${chatId}"
+API_BASE = "${SITE_BASE_URL}"
+USER_API_KEY = "${apiKey}"
+
+bot = TeleBot(BOT_TOKEN)
+HEADERS = {"mauthapi": USER_API_KEY, "Content-Type": "application/json"}
+RANGE_MAP = {}
+
+def fetch_countries_and_ranges():
+    # Pulls live countries/ranges from /liveaccess or /console
+    items = []
+    try:
+        r = requests.get(f"{API_BASE}/liveaccess", headers=HEADERS, timeout=15).json()
+        for s in ((r.get("data") or {}).get("services") or []):
+            label = s.get("country") or s.get("name") or s.get("sid") or "Server"
+            for rng in (s.get("ranges") or []):
+                items.append((f"{label} ({rng})", str(rng)))
+    except Exception:
+        pass
+
+    if not items:
+        try:
+            r = requests.get(f"{API_BASE}/console", headers=HEADERS, timeout=15).json()
+            for row in ((r.get("data") or {}).get("hits") or []):
+                label = row.get("country") or row.get("panel_name") or "Server"
+                rng = str(row.get("range") or "").strip()
+                if rng:
+                    items.append((f"{label} ({rng})", rng))
+        except Exception:
+            pass
+    return items[:20]
+
+@bot.message_handler(commands=["start", "countries"])
+def start_cmd(msg):
+    items = fetch_countries_and_ranges()
+    if not items:
+        bot.reply_to(msg, "No active server countries/ranges found right now.")
+        return
+
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    buttons = []
+    for idx, (label, rng) in enumerate(items):
+        key = f"r_{idx}"
+        RANGE_MAP[key] = (label, rng)
+        buttons.append(types.InlineKeyboardButton(label[:32], callback_data=key))
+    kb.add(*buttons)
+    bot.send_message(msg.chat.id, "Select a server country / range:", reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("r_"))
+def on_country_click(call):
+    bot.answer_callback_query(call.id, "Requesting number...")
+    picked = RANGE_MAP.get(call.data)
+    if not picked:
+        bot.send_message(call.message.chat.id, "Range expired. Send /start again.")
+        return
+    label, rng = picked
+    r = requests.post(f"{API_BASE}/getnum", headers=HEADERS, json={"range": rng}, timeout=25).json()
+    if (r.get("meta") or {}).get("code") == 200:
+        d = r.get("data") or {}
+        bot.send_message(
+            call.message.chat.id,
+            f"Number: {d.get('full_number')}\\nCountry: {d.get('country') or label}\\nServer: {r.get('matched_panel_name', '')}\\nRange: {d.get('range', rng)}"
+        )
+    else:
+        bot.send_message(call.message.chat.id, f"Failed: {r.get('message', 'Out of stock')}")
+
+def console_forward_loop():
+    seen = set()
+    while True:
+        try:
+            if CONSOLE_CHAT_ID and CONSOLE_CHAT_ID != "YOUR_CONSOLE_CHAT_ID":
+                r = requests.get(f"{API_BASE}/console", headers=HEADERS, timeout=15).json()
+                hits = (r.get("data") or {}).get("hits") or []
+                for h in hits[-10:]:
+                    uid = str(h.get("id") or f"{h.get('number')}-{h.get('range')}-{h.get('time','')}")
+                    if uid not in seen:
+                        seen.add(uid)
+                        text = (
+                            f"Live Console Hit\\n"
+                            f"Server: {h.get('panel_name') or h.get('panel') or '-'}\\n"
+                            f"Country: {h.get('country') or '-'}\\n"
+                            f"Range: {h.get('range') or '-'}\\n"
+                            f"Number: {h.get('number') or h.get('full_number') or '-'}"
+                        )
+                        bot.send_message(CONSOLE_CHAT_ID, text)
+        except Exception:
+            pass
+        time.sleep(5)
+
+threading.Thread(target=console_forward_loop, daemon=True).start()
+bot.infinity_polling(skip_pending=True)`;
+  }
+
+  async function runUserBot() {
+    const tokenInput = document.getElementById("botTokenInput");
+    const chatIdInput = document.getElementById("botChatIdInput");
+    const statusBadge = document.getElementById("botRunStatus");
+    const outBox = document.getElementById("botRunnerOutput");
+    const btn = document.getElementById("runBotBtn");
+
+    const botToken = (tokenInput?.value || "").trim();
+    const chatId = (chatIdInput?.value || "").trim();
+    const apiKey = (document.getElementById("pgApiKey")?.value || "").trim();
+
+    syncBotStarterCode();
+
+    if (!botToken) {
+      statusBadge.textContent = "Missing Token";
+      outBox.textContent = "Please paste a valid Bot Token first.";
+      return;
+    }
+    if (!chatId) {
+      statusBadge.textContent = "Missing Chat ID";
+      outBox.textContent = "Please paste a valid Chat ID for live console forwarding.";
+      return;
+    }
+    if (!apiKey) {
+      statusBadge.textContent = "Missing API Key";
+      outBox.textContent = "Please enter your User API Key in the Playground first.";
+      return;
+    }
+
+    btn.disabled = true;
+    statusBadge.textContent = "Starting...";
+    outBox.textContent = "Verifying bot token & launching with Master API...";
+
+    try {
+      const tgCheck = await fetch(`https://api.telegram.org/bot${encodeURIComponent(botToken)}/getMe`);
+      const tgData = await tgCheck.json();
+
+      if (!tgData.ok) {
+        statusBadge.textContent = "Invalid Token";
+        outBox.textContent = JSON.stringify({
+          ok: false,
+          message: "Telegram rejected Bot Token",
+          telegram_error: tgData.description || "Unauthorized"
+        }, null, 2);
+        return;
+      }
+
+      const res = await fetch(`${SITE_BASE_URL}/bot/run`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "mauthapi": apiKey
+        },
+        body: JSON.stringify({
+          bot_token: botToken,
+          chat_id: chatId,
+          api_base: SITE_BASE_URL,
+          api_key: apiKey
+        })
+      });
+
+      const contentType = res.headers.get("content-type") || "";
+      const payload = contentType.includes("application/json")
+        ? await res.json()
+        : { ok: res.ok, status: res.status, detail: await res.text() };
+
+      if (res.ok) {
+        statusBadge.textContent = "Bot Running";
+        showToast("User bot started!");
+      } else {
+        statusBadge.textContent = `HTTP ${res.status}`;
+      }
+
+      outBox.textContent = JSON.stringify({
+        bot_username: tgData.result?.username || "",
+        console_chat_id: chatId,
+        api_base: SITE_BASE_URL,
+        runner_response: payload
+      }, null, 2);
+    } catch (err) {
+      statusBadge.textContent = "Ready (Local)";
+      outBox.textContent = JSON.stringify({
+        ok: true,
+        note: "Bot code is synced with Bot Token, Chat ID, API Base, and API Key. Add POST /api/v1/bot/run on backend so clicking Run Bot starts the background bot + console forwarder automatically.",
+        bot_token: botToken,
+        chat_id: chatId,
+        api_base: SITE_BASE_URL,
+        error: String(err)
+      }, null, 2);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
   function syncPlaygroundEndpoint() {
     const sel = document.getElementById("pgEndpointSelect");
     const preview = document.getElementById("pgEndpointPreview");
@@ -397,5 +611,10 @@ bot.infinity_polling(skip_pending=True)</pre>
       btn.disabled = false;
     }
   }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    syncPlaygroundEndpoint();
+    syncBotStarterCode();
+  });
 </script>
 {% endblock %}
