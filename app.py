@@ -1099,7 +1099,7 @@ def index():
 def login():
     auto_flag = get_auto_account_flag()
     if request.method == "POST":
-        email = request.form.get("email", "").strip().lower()
+        email = (request.form.get("login") or request.form.get("email") or "").strip().lower()
         password = request.form.get("password", "")
 
         if email == ADMIN_EMAIL and password == ADMIN_PASSWORD:
