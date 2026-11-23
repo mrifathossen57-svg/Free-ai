@@ -6,27 +6,51 @@
   <title>{% block title %}ROCKET SMS HUB{% endblock %}</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    body { background-color: #0b0e0c; color: #e6ece8; }
-    .card { background-color: #121614; border: 1px solid #202824; }
-    .accent-btn { background-color: #16a34a; }
-    .accent-btn:hover { background-color: #15803d; }
+    body { background-color: #050814; color: #e2e8f0; }
+    .card { background-color: rgba(11, 16, 33, 0.92); border: 1px solid rgba(34, 211, 238, 0.2); }
+    .accent-btn {
+      background-image: linear-gradient(to right, #2563eb, #06b6d4, #2dd4bf);
+    }
+    .accent-btn:hover {
+      background-image: linear-gradient(to right, #3b82f6, #06b6d4, #d946ef);
+    }
   </style>
 </head>
-<body class="min-h-screen flex">
+<body class="min-h-screen flex bg-[#050814] text-slate-200 selection:bg-cyan-500/30 selection:text-cyan-200">
   {% if user and user.status in ['APPROVED', 'ACTIVE'] %}
   <!-- ডান পাশের ফাঁকা জায়গায় ক্লিক করলে মেনু বন্ধ করার Backdrop -->
   <div id="sidebar-backdrop"
        onclick="closeSidebar()"
-       class="fixed inset-0 bg-black/50 z-30 hidden md:hidden"></div>
+       class="fixed inset-0 bg-black/60 backdrop-blur-xs z-30 hidden md:hidden"></div>
 
   <aside id="sidebar"
-         class="w-64 bg-[#101412] border-r border-[#1e2622] flex flex-col justify-between p-4 fixed md:static inset-y-0 left-0 z-40 transform -translate-x-full md:translate-x-0 transition-transform duration-200">
+         class="w-64 bg-[#0b1021]/95 border-r border-cyan-400/20 flex flex-col justify-between p-4 fixed md:static inset-y-0 left-0 z-40 transform -translate-x-full md:translate-x-0 transition-transform duration-200 shadow-[4px_0_24px_rgba(34,211,238,0.06)]">
     <div>
-      <div class="flex items-center gap-2 px-2 py-3 mb-4">
-        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-400 to-cyan-500 flex items-center justify-center font-bold text-black">
-          V
+      <div class="px-2 py-3 mb-4 border-b border-slate-800/80">
+        <div class="flex items-center gap-2.5">
+          <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-cyan-400/25 via-indigo-500/25 to-fuchsia-500/25 border border-cyan-400/40 flex items-center justify-center shadow-[0_0_16px_rgba(217,70,239,0.2)]">
+            <svg class="w-5 h-5" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <linearGradient id="sideRocketGrad" x1="4" y1="4" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#22D3EE" />
+                  <stop offset="100%" stop-color="#E879F9" />
+                </linearGradient>
+              </defs>
+              <path d="M27 8C27 8 28.5 16.5 22.5 22.5L13.5 13.5C19.5 7.5 27 8 27 8Z" stroke="url(#sideRocketGrad)" stroke-width="2.4" stroke-linejoin="round"/>
+              <path d="M13.5 13.5L8.5 14.5L6 19.5L11 20.5L15.5 25L16.5 30L21.5 27.5L22.5 22.5" stroke="url(#sideRocketGrad)" stroke-width="2.2" stroke-linejoin="round"/>
+              <circle cx="21" cy="15" r="2.2" fill="#22D3EE"/>
+              <circle cx="9" cy="27" r="2.2" fill="#E879F9"/>
+            </svg>
+          </div>
+          <span class="font-extrabold tracking-wide text-base bg-gradient-to-r from-cyan-300 via-sky-400 to-fuchsia-400 bg-clip-text text-transparent">
+            ROCKET SMS HUB
+          </span>
         </div>
-        <span class="font-extrabold tracking-wide text-lg">ROCKET SMS HUB</span>
+        <div class="mt-2.5">
+          <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-cyan-500/10 border border-cyan-400/30 text-cyan-300">
+            V1.0.0 Running (siam vai)
+          </span>
+        </div>
       </div>
 
       <nav class="space-y-1 text-sm" aria-label="Main navigation">
@@ -35,12 +59,12 @@
           {% if item.key not in ['summary', 'sender-range', 'tweaks', 'api-docs'] %}
             {% if item.group and item.group != current_group.val and item.group != 'Extra' %}
               {% set current_group.val = item.group %}
-              <div class="pt-4 pb-1 px-3 text-xs font-semibold text-gray-500 uppercase">
+              <div class="pt-4 pb-1 px-3 text-xs font-semibold text-cyan-200/60 uppercase tracking-wider">
                 {{ item.group }}
               </div>
             {% endif %}
             <a href="{{ url_for('payment_page') if item.key == 'payment' else (url_for('dashboard') if item.key == 'dashboard' else url_for('section_page', section_key=item.key)) }}"
-               class="flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium transition {{ 'bg-emerald-600 text-white' if active == item.key else 'text-gray-300 hover:bg-[#19201c]' }}">
+               class="flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium transition {{ 'bg-gradient-to-r from-blue-600/90 via-cyan-500/90 to-fuchsia-500/80 text-white shadow-[0_4px_16px_rgba(34,211,238,0.2)]' if active == item.key else 'text-slate-300 hover:bg-cyan-500/10 hover:text-cyan-200' }}">
               <span>{{ item.label }}</span>
             </a>
           {% endif %}
@@ -48,16 +72,16 @@
 
         <div class="pt-4 space-y-2">
           <a href="{{ url_for('section_page', section_key='api-docs') }}"
-             class="block px-3 py-2.5 rounded-xl font-semibold transition {{ 'bg-emerald-600 text-white' if active == 'api-docs' else 'bg-emerald-950/60 border border-emerald-700/40 text-emerald-300 hover:bg-emerald-950' }}">
+             class="block px-3 py-2.5 rounded-xl font-semibold transition {{ 'bg-gradient-to-r from-blue-600 via-cyan-500 to-fuchsia-500 text-white shadow-[0_4px_16px_rgba(34,211,238,0.22)]' if active == 'api-docs' else 'bg-cyan-500/10 border border-cyan-400/30 text-cyan-300 hover:bg-fuchsia-500/15 hover:border-fuchsia-400/40 hover:text-fuchsia-200' }}">
             &lt;/&gt; API Documentation
           </a>
         </div>
       </nav>
     </div>
 
-    <div class="pt-4 border-t border-[#1e2622]">
+    <div class="pt-4 border-t border-slate-800/80">
       <a href="{{ url_for('logout') }}"
-         class="block px-3 py-2 rounded-xl text-rose-400 hover:bg-rose-950/30 text-sm font-medium transition">
+         class="block px-3 py-2 rounded-xl text-rose-400 hover:bg-rose-950/40 border border-transparent hover:border-rose-500/30 text-sm font-medium transition">
         → Logout
       </a>
     </div>
@@ -66,17 +90,22 @@
 
   <div class="flex-1 flex flex-col min-w-0">
     {% if user and user.status in ['APPROVED', 'ACTIVE'] %}
-    <header class="h-14 border-b border-[#1e2622] bg-[#101412] px-4 flex items-center justify-between">
+    <header class="h-14 border-b border-cyan-400/15 bg-[#0b1021]/90 backdrop-blur-md px-4 flex items-center justify-between">
       <button id="menu-toggle-btn"
               type="button"
               onclick="toggleSidebar()"
               aria-expanded="false"
               aria-controls="sidebar"
-              class="md:hidden px-3 py-1.5 rounded-lg bg-[#181f1b] hover:bg-[#202924] text-sm transition">
+              class="md:hidden px-3 py-1.5 rounded-lg bg-[#070b18] border border-cyan-400/30 text-cyan-300 hover:bg-cyan-500/15 text-sm transition">
         ☰ Menu
       </button>
-      <div class="text-xs text-gray-400 ml-auto">
-        UID: <span class="text-emerald-400 font-mono">{{ user.uid }}</span>
+      <div class="flex items-center gap-3 ml-auto">
+        <span class="hidden sm:inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-fuchsia-500/10 border border-fuchsia-400/30 text-fuchsia-300">
+          V1.0.0 Running (siam vai)
+        </span>
+        <div class="text-xs text-slate-400">
+          UID: <span class="text-cyan-300 font-mono">{{ user.uid }}</span>
+        </div>
       </div>
     </header>
     {% endif %}
@@ -85,7 +114,7 @@
       {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
           {% for category, msg in messages %}
-            <div class="mb-4 p-3 rounded-xl text-sm border {{ 'bg-emerald-950/60 border-emerald-700/50 text-emerald-200' if category == 'success' else 'bg-rose-950/60 border-rose-700/50 text-rose-200' }}">
+            <div class="mb-4 p-3 rounded-xl text-sm border {{ 'bg-cyan-950/60 border-cyan-400/40 text-cyan-200' if category == 'success' else 'bg-rose-950/60 border-rose-500/40 text-rose-200' }}">
               {{ msg }}
             </div>
           {% endfor %}
@@ -136,4 +165,4 @@
   </script>
   {% endif %}
 </body>
-    </html>
+              </html>
