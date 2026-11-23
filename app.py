@@ -144,7 +144,7 @@ PANELS = {
         ).rstrip("/"),
         "api_key_env": "PANEL4_API_KEY",
         "fallback_key_env": "",
-        "default_api_key": "ZNX_4MXS5N5JVJTLLDJY7GM87EKL",
+        "default_api_key": "ZNX_2WQM7CCV7VR8Y5R9P5IVZWDE",
         "auth_header": "mapikey",
         "headers": {"mapikey": os.environ.get("PANEL4_API_KEY", "ZNX_4MXS5N5JVJTLLDJY7GM87EKL").strip()},
         "endpoint": "/v1/active-ranges",
