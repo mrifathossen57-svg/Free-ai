@@ -1,46 +1,93 @@
 {% extends "base.html" %}
 {% block title %}ROCKET SMS HUB Login{% endblock %}
 {% block content %}
-<div class="max-w-md mx-auto mt-10 card rounded-2xl p-6">
-  <h1 class="text-2xl font-bold mb-1">ROCKET SMS HUB Login</h1>
-  <p class="text-sm text-gray-400 mb-6">Login with User or Agent credentials</p>
+<div class="min-h-[80vh] flex items-center justify-center px-4 py-10 bg-[#050814] relative overflow-hidden">
+  <!-- Subtle Cyan & Magenta Glow Accents -->
+  <div class="pointer-events-none absolute -top-24 -left-24 w-72 h-72 rounded-full bg-cyan-500/20 blur-3xl"></div>
+  <div class="pointer-events-none absolute -bottom-24 -right-24 w-72 h-72 rounded-full bg-fuchsia-500/20 blur-3xl"></div>
 
-  <form method="POST" class="space-y-4">
-    <div>
-      <label for="email" class="block text-xs text-gray-400 mb-1">Email Address (User / Agent Mail)</label>
-      <input id="email"
-             type="email"
-             name="email"
-             autocomplete="email"
-             required
-             placeholder="name@example.com"
-             class="w-full px-3.5 py-2.5 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-sm focus:outline-none focus:border-emerald-500" />
+  <div class="relative w-full max-w-md rounded-2xl p-6 sm:p-8 bg-[#0b1021]/95 border border-cyan-400/25 shadow-[0_0_40px_rgba(34,211,238,0.12)]">
+    <!-- Unique Rocket Node Emblem -->
+    <div class="mx-auto mb-3 w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-400/20 via-indigo-500/20 to-fuchsia-500/20 border border-cyan-400/40 flex items-center justify-center shadow-[0_0_20px_rgba(217,70,239,0.2)]">
+      <svg class="w-9 h-9" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="rocketGrad" x1="4" y1="4" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stop-color="#22D3EE" />
+            <stop offset="100%" stop-color="#E879F9" />
+          </linearGradient>
+        </defs>
+        <path d="M27 8C27 8 28.5 16.5 22.5 22.5L13.5 13.5C19.5 7.5 27 8 27 8Z" stroke="url(#rocketGrad)" stroke-width="2.2" stroke-linejoin="round"/>
+        <path d="M13.5 13.5L8.5 14.5L6 19.5L11 20.5L15.5 25L16.5 30L21.5 27.5L22.5 22.5" stroke="url(#rocketGrad)" stroke-width="2" stroke-linejoin="round"/>
+        <circle cx="21" cy="15" r="2.2" fill="#22D3EE"/>
+        <circle cx="9" cy="27" r="2.2" fill="#E879F9"/>
+        <line x1="11" y1="25" x2="15" y2="21" stroke="url(#rocketGrad)" stroke-width="1.8" stroke-linecap="round"/>
+      </svg>
     </div>
 
-    <div>
-      <label for="password" class="block text-xs text-gray-400 mb-1">Password</label>
-      <input id="password"
-             type="password"
-             name="password"
-             autocomplete="current-password"
-             required
-             placeholder="••••••••"
-             class="w-full px-3.5 py-2.5 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-sm focus:outline-none focus:border-emerald-500" />
+    <!-- Version Badge -->
+    <div class="flex justify-center mb-3">
+      <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-cyan-500/10 border border-cyan-400/30 text-cyan-300">
+        v1.0.0 (Secured)
+      </span>
     </div>
 
-    <div class="flex justify-end">
-      <a href="{{ url_for('forgot_password') }}" class="text-xs text-emerald-400 hover:underline">
-        Forgot Password?
+    <!-- Gradient Brand Title -->
+    <h1 class="text-2xl sm:text-3xl font-extrabold tracking-wide text-center bg-gradient-to-r from-cyan-300 via-sky-400 to-fuchsia-400 bg-clip-text text-transparent">
+      ROCKET SMS HUB
+    </h1>
+    <p class="text-xs sm:text-sm text-slate-300/80 text-center mt-1 mb-6">
+      Welcome back, Agent/User
+    </p>
+
+    <form method="POST" class="space-y-4">
+      <div>
+        <label for="login" class="block text-xs font-medium text-cyan-200/80 mb-1.5">
+          Phone or Email (User / Agent Mail)
+        </label>
+        <input id="login"
+               type="text"
+               name="login"
+               autocomplete="username"
+               required
+               placeholder="Enter phone or email"
+               class="w-full px-3.5 py-2.5 rounded-xl bg-[#070b18] border border-slate-700/80 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/20 transition" />
+      </div>
+
+      <div>
+        <label for="password" class="block text-xs font-medium text-fuchsia-200/80 mb-1.5">
+          Password
+        </label>
+        <input id="password"
+               type="password"
+               name="password"
+               autocomplete="current-password"
+               required
+               placeholder="Enter password"
+               class="w-full px-3.5 py-2.5 rounded-xl bg-[#070b18] border border-slate-700/80 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:border-fuchsia-400 focus:ring-2 focus:ring-fuchsia-400/20 transition" />
+      </div>
+
+      <div class="flex justify-end">
+        <a href="{{ url_for('forgot_password') }}" class="text-xs text-cyan-300 hover:text-fuchsia-300 hover:underline transition">
+          Forgot Password?
+        </a>
+      </div>
+
+      <p class="text-[11px] text-slate-400 text-center pt-1">
+        By continuing, you agree to our <span class="text-cyan-300">Terms &amp; Conditions</span>.
+      </p>
+
+      <button type="submit"
+              class="w-full py-2.5 rounded-xl bg-gradient-to-r from-blue-600 via-cyan-500 to-teal-400 hover:from-blue-500 hover:to-fuchsia-500 text-white font-semibold text-sm shadow-[0_6px_24px_rgba(34,211,238,0.28)] transition cursor-pointer">
+        Login to Dashboard
+      </button>
+    </form>
+
+    <p class="text-xs text-slate-400 mt-6 text-center">
+      Don't have an account?
+      <a href="{{ url_for('register') }}" class="text-cyan-300 hover:text-fuchsia-300 font-medium hover:underline transition">
+        Register here
       </a>
-    </div>
-
-    <button type="submit" class="w-full py-2.5 rounded-xl accent-btn text-white font-semibold text-sm transition">
-      Sign In →
-    </button>
-  </form>
-
-  <p class="text-xs text-gray-400 mt-5 text-center">
-    New user? <a href="{{ url_for('register') }}" class="text-emerald-400 hover:underline">Create account</a>
-  </p>
+    </p>
+  </div>
 </div>
 {% endblock %}
