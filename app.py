@@ -2725,6 +2725,51 @@ def api_v1_getnum(user):
     })
 
 
+@app.route("/api/v1/success-otp", methods=["GET"])
+@public_api_key_required
+def api_v1_success_otp(user):
+    raw_panel = (request.args.get("panel") or request.headers.get("X-Panel") or "").strip()
+    p = resolve_panel(raw_panel) if raw_panel else None
+    formatted, current_balance = _fetch_user_numbers_and_sync_otp(user, p["key"] if p else None)
+
+    otps = []
+    for item in formatted:
+        if item.get("otp_message"):
+            otps.append({
+                "id": item["id"],
+                "panel": item["panel"],
+                "panel_name": item["panel_name"],
+                "number": item["full_number"],
+                "range": item["range"],
+                "country": item["country"],
+                "message": item["otp_message"],
+                "earned_amount": item["earned_amount"],
+                "created_at": item["created_at"],
+            })
+
+    conn = get_db()
+    if p:
+        log_rows = [dict(r) for r in conn.execute(
+            "SELECT * FROM otp_logs WHERE user_email = ? AND panel_key = ? ORDER BY id DESC LIMIT 100",
+            (user["email"], p["key"])
+        ).fetchall()]
+    else:
+        log_rows = [dict(r) for r in conn.execute(
+            "SELECT * FROM otp_logs WHERE user_email = ? ORDER BY id DESC LIMIT 100",
+            (user["email"],)
+        ).fetchall()]
+    conn.close()
+
+    return jsonify({
+        "meta": {"code": 200, "status": "success"},
+        "data": {
+            "otps": otps,
+            "logs": log_rows,
+            "balance": current_balance,
+        }
+    })
+
+
 @app.route("/api/v1/my-numbers", methods=["GET"])
 @public_api_key_required
 def api_v1_my_numbers(user):
