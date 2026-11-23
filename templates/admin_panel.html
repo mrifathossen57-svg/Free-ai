@@ -2,30 +2,50 @@
 {% block title %}SR Admin Control Panel{% endblock %}
 {% block content %}
 <div class="max-w-5xl mx-auto space-y-8">
-  <div class="flex items-center justify-between">
-    <div>
-      <h1 class="text-2xl font-bold">SR Admin Control Panel</h1>
-      <p class="text-xs text-gray-400">Manage Agent Mail Auto Account, Multi-Panel Control, Agents, Rates, OTP Rate Limits, OTP Logs &amp; Withdrawals</p>
+  <!-- Header Banner -->
+  <div class="relative overflow-hidden rounded-2xl p-5 sm:p-6 bg-[#0b1021]/95 border border-cyan-400/25 shadow-[0_0_35px_rgba(34,211,238,0.1)] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <div class="pointer-events-none absolute -top-20 -left-20 w-60 h-60 rounded-full bg-cyan-500/15 blur-3xl"></div>
+    <div class="pointer-events-none absolute -bottom-20 -right-20 w-60 h-60 rounded-full bg-fuchsia-500/15 blur-3xl"></div>
+
+    <div class="relative z-10">
+      <div class="flex flex-wrap items-center gap-2 mb-1.5">
+        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-cyan-500/10 border border-cyan-400/30 text-cyan-300">
+          V1.0.0 Running (siam vai)
+        </span>
+        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-fuchsia-500/10 border border-fuchsia-400/30 text-fuchsia-300">
+          Admin Control
+        </span>
+      </div>
+      <h1 class="text-2xl sm:text-3xl font-extrabold tracking-tight bg-gradient-to-r from-cyan-300 via-sky-400 to-fuchsia-400 bg-clip-text text-transparent">
+        SR Admin Control Panel
+      </h1>
+      <p class="text-xs text-slate-300/80 mt-1">
+        Manage Agent Mail Auto Account, Multi-Panel Control, Agents, Rates, OTP Rate Limits, OTP Logs &amp; Withdrawals
+      </p>
     </div>
-    <a href="{{ url_for('logout') }}" class="px-4 py-2 rounded-xl bg-[#181f1b] text-xs text-rose-400">Logout</a>
+
+    <a href="{{ url_for('logout') }}"
+       class="relative z-10 self-start sm:self-center px-4 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-xs font-semibold text-rose-300 transition">
+      → Logout
+    </a>
   </div>
 
   <!-- Agent Mail Auto Account Switch -->
-  <div class="card rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+  <div class="card rounded-2xl p-5 border border-cyan-400/25 bg-[#0b1021]/90 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
     <div class="space-y-1">
       <h2 class="font-bold text-white">Agent Mail Auto Account Creation</h2>
-      <p class="text-xs text-gray-400">
-        When <span class="text-emerald-400 font-semibold">ON</span>, registering with an agent mail automatically activates the account.
-        When <span class="text-rose-400 font-semibold">OFF</span>, new accounts stay <span class="text-amber-300 font-semibold">PENDING</span> until the Agent approves or rejects.
+      <p class="text-xs text-slate-400">
+        When <span class="text-cyan-300 font-semibold">ON</span>, registering with an agent mail automatically activates the account.
+        When <span class="text-rose-400 font-semibold">OFF</span>, new accounts stay <span class="text-fuchsia-300 font-semibold">PENDING</span> until the Agent approves or rejects.
       </p>
     </div>
     <form method="POST" action="{{ url_for('toggle_agent_mail_account') }}">
       {% if agent_mail_auto_account %}
-        <button type="submit" class="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold">
+        <button type="submit" class="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 via-cyan-500 to-teal-400 hover:from-blue-500 hover:to-fuchsia-500 text-white text-xs font-semibold shadow-[0_4px_16px_rgba(34,211,238,0.22)] transition cursor-pointer">
           Status: ON (Click to Turn OFF)
         </button>
       {% else %}
-        <button type="submit" class="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold">
+        <button type="submit" class="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold shadow-[0_4px_16px_rgba(244,63,94,0.22)] transition cursor-pointer">
           Status: OFF (Click to Turn ON)
         </button>
       {% endif %}
@@ -43,28 +63,28 @@
     ] %}
 
     {% for p in panels_ui %}
-    <div class="card rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <div class="card rounded-2xl p-5 border border-cyan-400/20 bg-[#0b1021]/90 hover:border-cyan-400/40 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 transition">
       <div class="space-y-1">
         <div class="flex items-center gap-2">
           <h2 class="font-bold text-white">{{ p.title }} Panel</h2>
           {% if p.active %}
-            <span class="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-950 text-emerald-400 border border-emerald-700/40">ACTIVE</span>
+            <span class="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-cyan-500/10 text-cyan-300 border border-cyan-400/30">ACTIVE</span>
           {% else %}
-            <span class="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-rose-950 text-rose-400 border border-rose-700/40">OFF</span>
+            <span class="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-rose-950/70 text-rose-400 border border-rose-500/40">OFF</span>
           {% endif %}
         </div>
-        <p class="text-xs text-gray-400">
+        <p class="text-xs text-slate-400">
           Control the <span class="text-white font-semibold">{{ p.title }}</span> panel independently.
-          Even if other panels are OFF, <span class="text-white font-semibold">{{ p.title }}</span> works normally when <span class="text-emerald-400 font-semibold">ON</span>.
+          Even if other panels are OFF, <span class="text-white font-semibold">{{ p.title }}</span> works normally when <span class="text-cyan-300 font-semibold">ON</span>.
         </p>
       </div>
       <form method="POST" action="{{ url_for('toggle_any_panel', panel_key=p.key) }}">
         {% if p.active %}
-          <button type="submit" class="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold">
+          <button type="submit" class="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 via-cyan-500 to-teal-400 hover:from-blue-500 hover:to-fuchsia-500 text-white text-xs font-semibold shadow-[0_4px_16px_rgba(34,211,238,0.2)] transition cursor-pointer">
             Status: ON (Click to Turn OFF)
           </button>
         {% else %}
-          <button type="submit" class="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold">
+          <button type="submit" class="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold shadow-[0_4px_16px_rgba(244,63,94,0.2)] transition cursor-pointer">
             Status: OFF (Click to Turn ON)
           </button>
         {% endif %}
@@ -74,151 +94,151 @@
   </div>
 
   <!-- Add & Remove Agent Email -->
-  <div class="card rounded-2xl p-5">
-    <h2 class="font-bold mb-3">Add Agent Email</h2>
+  <div class="card rounded-2xl p-5 border border-fuchsia-400/20 bg-[#0b1021]/90">
+    <h2 class="font-bold text-white mb-3">Add Agent Email</h2>
     <form method="POST" action="{{ url_for('admin_add_agent') }}" class="flex flex-col sm:flex-row gap-2 mb-4">
       <input type="email" name="agent_email" required placeholder="agent@example.com"
-             class="flex-1 px-3 py-2 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-xs" />
+             class="flex-1 px-3 py-2 rounded-xl bg-[#070b18] border border-slate-700/80 text-slate-100 placeholder-slate-500 text-xs focus:outline-none focus:border-cyan-400 transition" />
       <input type="text" name="agent_password" placeholder="Optional password (default used)"
-             class="sm:w-56 px-3 py-2 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-xs" />
-      <button type="submit" class="px-4 py-2 rounded-xl accent-btn text-xs font-semibold text-white">Add Agent</button>
+             class="sm:w-56 px-3 py-2 rounded-xl bg-[#070b18] border border-slate-700/80 text-slate-100 placeholder-slate-500 text-xs focus:outline-none focus:border-fuchsia-400 transition" />
+      <button type="submit" class="px-4 py-2 rounded-xl accent-btn text-xs font-semibold text-white cursor-pointer">Add Agent</button>
     </form>
 
     <div class="space-y-1.5 text-xs">
       {% for ag in agents %}
-        <div class="flex items-center justify-between gap-2 px-3 py-1.5 rounded-lg bg-[#0c0f0d]">
-          <span class="text-emerald-400 font-mono">{{ ag.email }}</span>
+        <div class="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-[#070b18] border border-slate-800/80">
+          <span class="text-cyan-300 font-mono">{{ ag.email }}</span>
           <div class="flex items-center gap-3">
-            <span class="text-gray-400 font-mono">
-              Users: {{ (agent_account_counts.get(ag.email, 0) if agent_account_counts is defined else 0) }}/{{ max_accounts_per_agent|default(200) }}
+            <span class="text-slate-400 font-mono">
+              Users: <span class="text-fuchsia-300">{{ (agent_account_counts.get(ag.email, 0) if agent_account_counts is defined else 0) }}/{{ max_accounts_per_agent|default(200) }}</span>
             </span>
-            <span class="text-gray-400">{{ ag.created_at }}</span>
+            <span class="text-slate-400">{{ ag.created_at }}</span>
             <form method="POST" action="{{ url_for('admin_remove_agent') }}" class="inline">
               <input type="hidden" name="agent_email" value="{{ ag.email }}" />
-              <button type="submit" class="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-semibold">
+              <button type="submit" class="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-semibold transition cursor-pointer">
                 Remove
               </button>
             </form>
           </div>
         </div>
       {% else %}
-        <div class="text-gray-400">No agents added yet.</div>
+        <div class="text-slate-400">No agents added yet.</div>
       {% endfor %}
     </div>
   </div>
 
   <!-- Country Rate, Service Rate & OTP Rate Limit -->
   <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-    <div class="card rounded-2xl p-5">
-      <h2 class="font-bold mb-3">Set Country Rate ($)</h2>
+    <div class="card rounded-2xl p-5 border border-cyan-400/20 bg-[#0b1021]/90">
+      <h2 class="font-bold text-white mb-3">Set Country Rate ($)</h2>
       <form method="POST" action="{{ url_for('set_country_rate') }}" class="flex gap-2 mb-4">
         <input type="text" name="country" required placeholder="e.g. United Kingdom"
-               class="flex-1 px-3 py-2 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-xs" />
+               class="flex-1 px-3 py-2 rounded-xl bg-[#070b18] border border-slate-700/80 text-slate-100 placeholder-slate-500 text-xs focus:outline-none focus:border-cyan-400 transition" />
         <input type="number" step="0.001" name="rate" required placeholder="0.15"
-               class="w-24 px-3 py-2 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-xs" />
-        <button type="submit" class="px-4 py-2 rounded-xl accent-btn text-xs font-semibold text-white">Save</button>
+               class="w-24 px-3 py-2 rounded-xl bg-[#070b18] border border-slate-700/80 text-slate-100 placeholder-slate-500 text-xs focus:outline-none focus:border-cyan-400 transition" />
+        <button type="submit" class="px-4 py-2 rounded-xl accent-btn text-xs font-semibold text-white cursor-pointer">Save</button>
       </form>
       <div class="space-y-1.5 text-xs">
         {% for c, r in country_rates.items() %}
-          <div class="flex justify-between px-3 py-1.5 rounded-lg bg-[#0c0f0d]">
-            <span>{{ c }}</span>
-            <span class="text-emerald-400 font-mono">${{ "%.3f"|format(r) }}</span>
+          <div class="flex justify-between px-3 py-1.5 rounded-lg bg-[#070b18] border border-slate-800/80">
+            <span class="text-slate-200">{{ c }}</span>
+            <span class="text-cyan-300 font-mono">${{ "%.3f"|format(r) }}</span>
           </div>
         {% endfor %}
       </div>
     </div>
 
-    <div class="card rounded-2xl p-5">
-      <h2 class="font-bold mb-3">Set Service Rate ($)</h2>
+    <div class="card rounded-2xl p-5 border border-fuchsia-400/20 bg-[#0b1021]/90">
+      <h2 class="font-bold text-white mb-3">Set Service Rate ($)</h2>
       <form method="POST" action="{{ url_for('set_service_rate') }}" class="flex gap-2 mb-4">
         <input type="text" name="service" required placeholder="e.g. WhatsApp"
-               class="flex-1 px-3 py-2 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-xs" />
+               class="flex-1 px-3 py-2 rounded-xl bg-[#070b18] border border-slate-700/80 text-slate-100 placeholder-slate-500 text-xs focus:outline-none focus:border-fuchsia-400 transition" />
         <input type="number" step="0.001" name="rate" required placeholder="0.20"
-               class="w-24 px-3 py-2 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-xs" />
-        <button type="submit" class="px-4 py-2 rounded-xl accent-btn text-xs font-semibold text-white">Save</button>
+               class="w-24 px-3 py-2 rounded-xl bg-[#070b18] border border-slate-700/80 text-slate-100 placeholder-slate-500 text-xs focus:outline-none focus:border-fuchsia-400 transition" />
+        <button type="submit" class="px-4 py-2 rounded-xl accent-btn text-xs font-semibold text-white cursor-pointer">Save</button>
       </form>
       <div class="space-y-1.5 text-xs">
         {% for s, r in service_rates.items() %}
-          <div class="flex justify-between px-3 py-1.5 rounded-lg bg-[#0c0f0d]">
-            <span>{{ s }}</span>
-            <span class="text-amber-300 font-mono">${{ "%.3f"|format(r) }}</span>
+          <div class="flex justify-between px-3 py-1.5 rounded-lg bg-[#070b18] border border-slate-800/80">
+            <span class="text-slate-200">{{ s }}</span>
+            <span class="text-fuchsia-300 font-mono">${{ "%.3f"|format(r) }}</span>
           </div>
         {% endfor %}
       </div>
     </div>
 
-    <div class="card rounded-2xl p-5">
-      <h2 class="font-bold mb-3">Set OTP Rate Limit (Max $)</h2>
-      <p class="text-[11px] text-gray-400 mb-3">Max service rate agents can set per service.</p>
+    <div class="card rounded-2xl p-5 border border-cyan-400/20 bg-[#0b1021]/90">
+      <h2 class="font-bold text-white mb-3">Set OTP Rate Limit (Max $)</h2>
+      <p class="text-[11px] text-slate-400 mb-3">Max service rate agents can set per service.</p>
       <form method="POST" action="{{ url_for('set_otp_rate_limit') }}" class="flex gap-2 mb-4">
         <input type="text" name="service" required placeholder="e.g. WhatsApp"
-               class="flex-1 px-3 py-2 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-xs" />
+               class="flex-1 px-3 py-2 rounded-xl bg-[#070b18] border border-slate-700/80 text-slate-100 placeholder-slate-500 text-xs focus:outline-none focus:border-cyan-400 transition" />
         <input type="number" step="0.001" name="max_rate" required placeholder="0.20"
-               class="w-24 px-3 py-2 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-xs" />
-        <button type="submit" class="px-4 py-2 rounded-xl accent-btn text-xs font-semibold text-white">Save</button>
+               class="w-24 px-3 py-2 rounded-xl bg-[#070b18] border border-slate-700/80 text-slate-100 placeholder-slate-500 text-xs focus:outline-none focus:border-cyan-400 transition" />
+        <button type="submit" class="px-4 py-2 rounded-xl accent-btn text-xs font-semibold text-white cursor-pointer">Save</button>
       </form>
       <div class="space-y-1.5 text-xs">
         {% set limits = otp_rate_limits if otp_rate_limits is defined else {} %}
         {% for s, lim in limits.items() %}
-          <div class="flex justify-between px-3 py-1.5 rounded-lg bg-[#0c0f0d]">
-            <span>{{ s }}</span>
-            <span class="text-sky-400 font-mono">Max ${{ "%.3f"|format(lim) }}</span>
+          <div class="flex justify-between px-3 py-1.5 rounded-lg bg-[#070b18] border border-slate-800/80">
+            <span class="text-slate-200">{{ s }}</span>
+            <span class="text-sky-300 font-mono">Max ${{ "%.3f"|format(lim) }}</span>
           </div>
         {% else %}
-          <div class="text-gray-400">No rate limits set yet.</div>
+          <div class="text-slate-400">No rate limits set yet.</div>
         {% endfor %}
       </div>
     </div>
   </div>
 
   <!-- bKash / Nagad Withdraw Requests -->
-  <div class="card rounded-2xl p-5">
-    <h2 class="font-bold mb-4">bKash / Nagad Withdraw Requests</h2>
+  <div class="card rounded-2xl p-5 border border-fuchsia-400/20 bg-[#0b1021]/90">
+    <h2 class="font-bold text-white mb-4">bKash / Nagad Withdraw Requests</h2>
     <div class="space-y-3">
       {% for w in withdrawals %}
-        <div class="p-4 rounded-xl bg-[#0c0f0d] border border-[#202824] flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div class="p-4 rounded-xl bg-[#070b18] border border-slate-800/80 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
           <div class="text-xs space-y-1">
-            <div class="text-sm font-bold text-white">{{ w.method }} • <span class="font-mono text-emerald-400">{{ w.wallet_number }}</span> — ${{ "%.2f"|format(w.amount) }}</div>
-            <div class="text-gray-400">User: {{ w.user_name }} ({{ w.user_email }}) | {{ w.created_at }}</div>
-            <div>Status: <span class="font-semibold text-amber-300">{{ w.status }}</span></div>
+            <div class="text-sm font-bold text-white">{{ w.method }} • <span class="font-mono text-cyan-300">{{ w.wallet_number }}</span> — ${{ "%.2f"|format(w.amount) }}</div>
+            <div class="text-slate-400">User: {{ w.user_name }} ({{ w.user_email }}) | {{ w.created_at }}</div>
+            <div>Status: <span class="font-semibold text-fuchsia-300">{{ w.status }}</span></div>
           </div>
 
           {% if w.status == 'PENDING' %}
           <div class="flex flex-wrap gap-2">
             <form method="POST" action="{{ url_for('decide_withdraw', req_id=w.id, decision='approve') }}">
-              <button type="submit" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold">Approve</button>
+              <button type="submit" class="px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 via-cyan-500 to-teal-400 hover:from-blue-500 hover:to-fuchsia-500 text-white text-xs font-semibold transition cursor-pointer">Approve</button>
             </form>
             <form method="POST" action="{{ url_for('decide_withdraw', req_id=w.id, decision='reject') }}" class="flex gap-2">
               <input type="text" name="reason" placeholder="Reject reason"
-                     class="px-3 py-2 rounded-xl bg-[#121614] border border-[#242d28] text-xs w-32" />
-              <button type="submit" class="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold">Reject</button>
+                     class="px-3 py-2 rounded-xl bg-[#0b1021] border border-slate-700/80 text-slate-100 placeholder-slate-500 text-xs w-32 focus:outline-none focus:border-rose-400 transition" />
+              <button type="submit" class="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold transition cursor-pointer">Reject</button>
             </form>
           </div>
           {% endif %}
         </div>
       {% else %}
-        <div class="text-sm text-gray-400">No withdrawal requests yet.</div>
+        <div class="text-sm text-slate-400">No withdrawal requests yet.</div>
       {% endfor %}
     </div>
   </div>
 
   <!-- Received OTP & Country Rate Logs -->
-  <div class="card rounded-2xl p-5">
-    <h2 class="font-bold mb-4">Received OTP &amp; Rate Logs</h2>
+  <div class="card rounded-2xl p-5 border border-cyan-400/20 bg-[#0b1021]/90">
+    <h2 class="font-bold text-white mb-4">Received OTP &amp; Rate Logs</h2>
     <div class="space-y-2 text-xs">
       {% for log in otp_logs %}
-        <div class="p-3 rounded-xl bg-[#0c0f0d] flex flex-wrap items-center justify-between gap-2">
-          <div>
+        <div class="p-3 rounded-xl bg-[#070b18] border border-slate-800/80 flex flex-wrap items-center justify-between gap-2">
+          <div class="text-slate-300">
             <span class="font-mono text-white font-semibold">{{ log.number_val }}</span>
-            • Server: <span class="text-sky-400">{{ log.panel_key or '1' }} server</span>
-            • Country: <span class="text-amber-300">{{ log.country }}</span>
-            • Service: <span class="text-emerald-400">{{ log.service }}</span>
+            • Server: <span class="text-sky-300">{{ log.panel_key or '1' }} server</span>
+            • Country: <span class="text-fuchsia-300">{{ log.country }}</span>
+            • Service: <span class="text-cyan-300">{{ log.service }}</span>
             • User: {{ log.user_email }}
           </div>
-          <div class="font-mono text-emerald-400 font-bold">+${{ "%.3f"|format(log.rate) }}</div>
+          <div class="font-mono text-cyan-300 font-bold">+${{ "%.3f"|format(log.rate) }}</div>
         </div>
       {% else %}
-        <div class="text-gray-400">No OTP received yet.</div>
+        <div class="text-slate-400">No OTP received yet.</div>
       {% endfor %}
     </div>
   </div>
