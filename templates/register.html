@@ -1,58 +1,100 @@
 {% extends "base.html" %}
 {% block title %}Account Create siam{% endblock %}
 {% block content %}
-<div class="max-w-md mx-auto mt-10 card rounded-2xl p-6">
-  <h1 class="text-2xl font-bold mb-1">Account Create siam</h1>
-  {% if agent_mail_auto_account %}
-    <p class="text-sm text-gray-400 mb-6">Fill in your details. Using a valid agent mail will activate your account automatically.</p>
-  {% else %}
-    <p class="text-sm text-gray-400 mb-6">Fill in your details to send an approval request under the selected agent mail.</p>
-  {% endif %}
+<div class="min-h-[80vh] flex items-center justify-center px-4 py-8 bg-[#050814] relative overflow-hidden">
+  <!-- Subtle Cyan & Magenta Glow Accents -->
+  <div class="pointer-events-none absolute -top-24 -left-24 w-72 h-72 rounded-full bg-cyan-500/20 blur-3xl"></div>
+  <div class="pointer-events-none absolute -bottom-24 -right-24 w-72 h-72 rounded-full bg-fuchsia-500/20 blur-3xl"></div>
 
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% if messages %}
-      <div class="space-y-2 mb-4">
-        {% for category, msg in messages %}
-          <div class="px-3.5 py-2.5 rounded-xl text-xs font-semibold {% if category == 'error' %}bg-rose-500/15 text-rose-400 border border-rose-500/30{% else %}bg-emerald-500/15 text-emerald-400 border border-emerald-500/30{% endif %}">
-            {{ msg }}
-          </div>
-        {% endfor %}
-      </div>
+  <div class="relative w-full max-w-md rounded-2xl p-6 sm:p-8 bg-[#0b1021]/95 border border-cyan-400/25 shadow-[0_0_40px_rgba(34,211,238,0.12)]">
+    <!-- Unique Rocket Node Emblem -->
+    <div class="mx-auto mb-3 w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-400/20 via-indigo-500/20 to-fuchsia-500/20 border border-cyan-400/40 flex items-center justify-center shadow-[0_0_20px_rgba(217,70,239,0.2)]">
+      <svg class="w-9 h-9" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="regRocketGrad" x1="4" y1="4" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stop-color="#22D3EE" />
+            <stop offset="100%" stop-color="#E879F9" />
+          </linearGradient>
+        </defs>
+        <path d="M27 8C27 8 28.5 16.5 22.5 22.5L13.5 13.5C19.5 7.5 27 8 27 8Z" stroke="url(#regRocketGrad)" stroke-width="2.2" stroke-linejoin="round"/>
+        <path d="M13.5 13.5L8.5 14.5L6 19.5L11 20.5L15.5 25L16.5 30L21.5 27.5L22.5 22.5" stroke="url(#regRocketGrad)" stroke-width="2" stroke-linejoin="round"/>
+        <circle cx="21" cy="15" r="2.2" fill="#22D3EE"/>
+        <circle cx="9" cy="27" r="2.2" fill="#E879F9"/>
+        <line x1="11" y1="25" x2="15" y2="21" stroke="url(#regRocketGrad)" stroke-width="1.8" stroke-linecap="round"/>
+      </svg>
+    </div>
+
+    <!-- Version Badge -->
+    <div class="flex justify-center mb-3">
+      <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-cyan-500/10 border border-cyan-400/30 text-cyan-300">
+        V1.0.0 Running (siam vai)
+      </span>
+    </div>
+
+    <!-- Gradient Brand Title -->
+    <h1 class="text-2xl sm:text-3xl font-extrabold tracking-wide text-center bg-gradient-to-r from-cyan-300 via-sky-400 to-fuchsia-400 bg-clip-text text-transparent">
+      Account Create siam
+    </h1>
+
+    {% if agent_mail_auto_account %}
+      <p class="text-xs sm:text-sm text-slate-300/80 text-center mt-1 mb-6">
+        Fill in your details. Using a valid agent mail will activate your account automatically.
+      </p>
+    {% else %}
+      <p class="text-xs sm:text-sm text-slate-300/80 text-center mt-1 mb-6">
+        Fill in your details to send an approval request under the selected agent mail.
+      </p>
     {% endif %}
-  {% endwith %}
 
-  <form method="POST" action="{{ url_for('register') }}" class="space-y-4">
-    <div>
-      <label class="block text-xs text-gray-400 mb-1">User name</label>
-      <input type="text" name="name" required placeholder="Enter user name"
-             class="w-full px-3.5 py-2.5 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-sm focus:outline-none focus:border-emerald-500" />
-    </div>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="space-y-2 mb-4">
+          {% for category, msg in messages %}
+            <div class="px-3.5 py-2.5 rounded-xl text-xs font-semibold {% if category == 'error' %}bg-rose-500/15 text-rose-400 border border-rose-500/30{% else %}bg-cyan-500/15 text-cyan-300 border border-cyan-400/30{% endif %}">
+              {{ msg }}
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
 
-    <div>
-      <label class="block text-xs text-gray-400 mb-1">Your email</label>
-      <input type="email" name="email" required placeholder="you@example.com"
-             class="w-full px-3.5 py-2.5 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-sm focus:outline-none focus:border-emerald-500" />
-    </div>
+    <form method="POST" action="{{ url_for('register') }}" class="space-y-4">
+      <div>
+        <label class="block text-xs font-medium text-cyan-200/80 mb-1.5">User name</label>
+        <input type="text" name="name" required placeholder="Enter user name"
+               class="w-full px-3.5 py-2.5 rounded-xl bg-[#070b18] border border-slate-700/80 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/20 transition" />
+      </div>
 
-    <div>
-      <label class="block text-xs text-gray-400 mb-1">Ajent mail</label>
-      <input type="email" name="agent_email" required placeholder="agent@example.com"
-             class="w-full px-3.5 py-2.5 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-sm focus:outline-none focus:border-emerald-500" />
-    </div>
+      <div>
+        <label class="block text-xs font-medium text-cyan-200/80 mb-1.5">Your email</label>
+        <input type="email" name="email" required placeholder="you@example.com"
+               class="w-full px-3.5 py-2.5 rounded-xl bg-[#070b18] border border-slate-700/80 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/20 transition" />
+      </div>
 
-    <div>
-      <label class="block text-xs text-gray-400 mb-1">Creat Passward</label>
-      <input type="password" name="password" required placeholder="Create password"
-             class="w-full px-3.5 py-2.5 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-sm focus:outline-none focus:border-emerald-500" />
-    </div>
+      <div>
+        <label class="block text-xs font-medium text-fuchsia-200/80 mb-1.5">Ajent mail</label>
+        <input type="email" name="agent_email" required placeholder="agent@example.com"
+               class="w-full px-3.5 py-2.5 rounded-xl bg-[#070b18] border border-slate-700/80 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:border-fuchsia-400 focus:ring-2 focus:ring-fuchsia-400/20 transition" />
+      </div>
 
-    <button type="submit" class="w-full py-2.5 rounded-xl accent-btn text-white font-semibold text-sm">
-      Account creat
-    </button>
-  </form>
+      <div>
+        <label class="block text-xs font-medium text-fuchsia-200/80 mb-1.5">Creat Passward</label>
+        <input type="password" name="password" required placeholder="Create password"
+               class="w-full px-3.5 py-2.5 rounded-xl bg-[#070b18] border border-slate-700/80 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:border-fuchsia-400 focus:ring-2 focus:ring-fuchsia-400/20 transition" />
+      </div>
 
-  <p class="text-xs text-gray-400 mt-5 text-center">
-    Already registered? <a href="{{ url_for('login') }}" class="text-emerald-400 hover:underline">Sign In</a>
-  </p>
+      <button type="submit"
+              class="w-full py-2.5 rounded-xl accent-btn text-white font-semibold text-sm shadow-[0_6px_24px_rgba(34,211,238,0.28)] transition cursor-pointer">
+        Account creat
+      </button>
+    </form>
+
+    <p class="text-xs text-slate-400 mt-6 text-center">
+      Already registered?
+      <a href="{{ url_for('login') }}" class="text-cyan-300 hover:text-fuchsia-300 font-medium hover:underline transition">
+        Sign In
+      </a>
+    </p>
+  </div>
 </div>
 {% endblock %}
