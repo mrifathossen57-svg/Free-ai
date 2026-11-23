@@ -2,62 +2,89 @@
 {% block title %}Agent Panel{% endblock %}
 {% block content %}
 <div class="max-w-4xl mx-auto space-y-6">
-  <div class="flex flex-wrap items-center justify-between gap-2">
-    <div>
-      <h1 class="text-2xl font-bold">Agent Panel</h1>
-      <p class="text-xs text-gray-400">Your Agent Email, Service Rate Setup &amp; OTP Statistics</p>
+  <!-- Header Banner -->
+  <div class="relative overflow-hidden rounded-2xl p-5 sm:p-6 bg-[#0b1021]/95 border border-cyan-400/25 shadow-[0_0_35px_rgba(34,211,238,0.1)] flex flex-wrap items-center justify-between gap-4">
+    <div class="pointer-events-none absolute -top-20 -left-20 w-60 h-60 rounded-full bg-cyan-500/15 blur-3xl"></div>
+    <div class="pointer-events-none absolute -bottom-20 -right-20 w-60 h-60 rounded-full bg-fuchsia-500/15 blur-3xl"></div>
+
+    <div class="relative z-10">
+      <div class="flex flex-wrap items-center gap-2 mb-1.5">
+        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-cyan-500/10 border border-cyan-400/30 text-cyan-300">
+          V1.0.0 Running (siam vai)
+        </span>
+        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-fuchsia-500/10 border border-fuchsia-400/30 text-fuchsia-300">
+          Agent Workspace
+        </span>
+      </div>
+      <h1 class="text-2xl sm:text-3xl font-extrabold tracking-tight bg-gradient-to-r from-cyan-300 via-sky-400 to-fuchsia-400 bg-clip-text text-transparent">
+        Agent Panel
+      </h1>
+      <p class="text-xs text-slate-300/80 mt-1">
+        Your Agent Email, Service Rate Setup &amp; OTP Statistics
+      </p>
     </div>
-    <div class="flex items-center gap-2">
+
+    <div class="relative z-10 flex items-center gap-2">
       <button type="button" onclick="openApiPermissionModal('', 'enable')"
-              class="px-4 py-2 rounded-xl accent-btn text-xs font-semibold text-white">
+              class="px-4 py-2 rounded-xl accent-btn text-xs font-semibold text-white shadow-[0_4px_16px_rgba(34,211,238,0.22)] transition cursor-pointer">
         API Permission
       </button>
-      <a href="{{ url_for('logout') }}" class="px-4 py-2 rounded-xl bg-[#181f1b] text-xs text-rose-400">Logout</a>
+      <a href="{{ url_for('logout') }}"
+         class="px-4 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-xs font-semibold text-rose-300 transition">
+        → Logout
+      </a>
     </div>
   </div>
 
-  <div class="card rounded-2xl p-5 space-y-4">
-    <p class="text-sm text-gray-300"><strong>Agent Email:</strong> <span class="text-emerald-400 font-mono">{{ agent_email }}</span></p>
+  <!-- Agent Info & Stats -->
+  <div class="card rounded-2xl p-5 border border-cyan-400/20 bg-[#0b1021]/90 space-y-4">
+    <p class="text-sm text-slate-300">
+      <strong>Agent Email:</strong> <span class="text-cyan-300 font-mono">{{ agent_email }}</span>
+    </p>
 
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-      <div class="p-3.5 rounded-xl bg-[#0c0f0d] border border-[#202824]">
-        <p class="text-gray-400">Total Accounts Created</p>
-        <p class="text-lg font-bold text-white mt-1"><strong>{{ user_count }} / {{ max_accounts_per_agent|default(200) }}</strong></p>
+      <div class="p-3.5 rounded-xl bg-[#070b18] border border-cyan-400/20">
+        <p class="text-slate-400">Total Accounts Created</p>
+        <p class="text-lg font-bold text-white mt-1">
+          <strong>{{ user_count }} / {{ max_accounts_per_agent|default(200) }}</strong>
+        </p>
       </div>
 
-      <div class="p-3.5 rounded-xl bg-[#0c0f0d] border border-[#202824]">
-        <p class="text-gray-400">Total OTP</p>
-        <p class="text-lg font-bold text-emerald-400 mt-1"><strong>{{ total_otp }}</strong></p>
+      <div class="p-3.5 rounded-xl bg-[#070b18] border border-cyan-400/20">
+        <p class="text-slate-400">Total OTP</p>
+        <p class="text-lg font-bold text-cyan-300 mt-1"><strong>{{ total_otp }}</strong></p>
       </div>
 
-      <div class="p-3.5 rounded-xl bg-[#0c0f0d] border border-[#202824]">
-        <p class="text-gray-400">Today OTP</p>
-        <p class="text-lg font-bold text-amber-300 mt-1"><strong>{{ today_otp }}</strong></p>
+      <div class="p-3.5 rounded-xl bg-[#070b18] border border-fuchsia-400/20">
+        <p class="text-slate-400">Today OTP</p>
+        <p class="text-lg font-bold text-fuchsia-300 mt-1"><strong>{{ today_otp }}</strong></p>
       </div>
 
-      <div class="p-3.5 rounded-xl bg-[#0c0f0d] border border-[#202824]">
-        <p class="text-gray-400">1 Month (30 Days) OTP</p>
-        <p class="text-lg font-bold text-sky-400 mt-1"><strong>{{ month_otp }}</strong></p>
+      <div class="p-3.5 rounded-xl bg-[#070b18] border border-cyan-400/20">
+        <p class="text-slate-400">1 Month (30 Days) OTP</p>
+        <p class="text-lg font-bold text-sky-300 mt-1"><strong>{{ month_otp }}</strong></p>
       </div>
     </div>
   </div>
 
   <!-- Service Rate Setup (Under Agent Rate Limit) -->
-  <div class="card rounded-2xl p-5 space-y-4">
+  <div class="card rounded-2xl p-5 border border-fuchsia-400/20 bg-[#0b1021]/90 space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-2">
       <div>
-        <h2 class="font-bold">Service Rate Setup ($)</h2>
-        <p class="text-xs text-gray-400">Users created under your agent email will receive the service rate you set here.</p>
+        <h2 class="font-bold text-white">Service Rate Setup ($)</h2>
+        <p class="text-xs text-slate-400">Users created under your agent email will receive the service rate you set here.</p>
       </div>
-      <span class="text-xs text-sky-400 font-mono">Admin OTP Rate Limit Enforced</span>
+      <span class="px-2.5 py-0.5 rounded-full text-[11px] font-mono bg-cyan-500/10 border border-cyan-400/30 text-cyan-300">
+        Admin OTP Rate Limit Enforced
+      </span>
     </div>
 
     <form method="POST" action="{{ url_for('agent_set_service_rate') }}" class="flex flex-col sm:flex-row gap-2">
       <input type="text" name="service" required placeholder="e.g. WhatsApp"
-             class="flex-1 px-3 py-2 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-xs" />
+             class="flex-1 px-3 py-2 rounded-xl bg-[#070b18] border border-slate-700/80 text-slate-100 placeholder-slate-500 text-xs focus:outline-none focus:border-cyan-400 transition" />
       <input type="number" step="0.001" name="rate" required placeholder="e.g. 0.05"
-             class="sm:w-32 px-3 py-2 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-xs" />
-      <button type="submit" class="px-4 py-2 rounded-xl accent-btn text-xs font-semibold text-white">
+             class="sm:w-32 px-3 py-2 rounded-xl bg-[#070b18] border border-slate-700/80 text-slate-100 placeholder-slate-500 text-xs focus:outline-none focus:border-fuchsia-400 transition" />
+      <button type="submit" class="px-4 py-2 rounded-xl accent-btn text-xs font-semibold text-white cursor-pointer">
         Save Rate
       </button>
     </form>
@@ -69,49 +96,49 @@
     <div class="space-y-1.5 text-xs">
       {% for s, r in ag_rates.items() %}
         {% set lim = limits.get(s) %}
-        <div class="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-lg bg-[#0c0f0d] border border-[#1d2420]">
+        <div class="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-[#070b18] border border-slate-800/80">
           <span class="font-semibold text-white">{{ s }}</span>
           <div class="flex items-center gap-3 font-mono">
-            <span class="text-emerald-400 font-bold">Your Rate: ${{ "%.3f"|format(r) }}</span>
+            <span class="text-cyan-300 font-bold">Your Rate: ${{ "%.3f"|format(r) }}</span>
             {% if lim is not none %}
-              <span class="text-sky-400">Max Limit: ${{ "%.3f"|format(lim) }}</span>
+              <span class="text-fuchsia-300">Max Limit: ${{ "%.3f"|format(lim) }}</span>
             {% elif s in base_rates %}
-              <span class="text-gray-400">Base: ${{ "%.3f"|format(base_rates[s]) }}</span>
+              <span class="text-slate-400">Base: ${{ "%.3f"|format(base_rates[s]) }}</span>
             {% else %}
-              <span class="text-gray-400">Limit: No Cap</span>
+              <span class="text-slate-400">Limit: No Cap</span>
             {% endif %}
           </div>
         </div>
       {% else %}
-        <div class="text-gray-400">No service rates configured yet.</div>
+        <div class="text-slate-400">No service rates configured yet.</div>
       {% endfor %}
     </div>
   </div>
 
   <!-- Accounts Created With Your Agent Email -->
-  <div class="card rounded-2xl p-5">
-    <h2 class="font-bold mb-3">Accounts Created With Your Agent Email</h2>
+  <div class="card rounded-2xl p-5 border border-cyan-400/20 bg-[#0b1021]/90">
+    <h2 class="font-bold text-white mb-3">Accounts Created With Your Agent Email</h2>
     <div class="space-y-2 text-xs">
       {% for u in requests_list %}
-        <div class="p-3 rounded-xl bg-[#0c0f0d] flex flex-wrap items-center justify-between gap-2">
+        <div class="p-3 rounded-xl bg-[#070b18] border border-slate-800/80 flex flex-wrap items-center justify-between gap-2">
           <div>
             <span class="font-semibold text-white">{{ u.name }}</span>
-            <span class="text-gray-400">({{ u.email }})</span>
+            <span class="text-slate-400">({{ u.email }})</span>
           </div>
           <div class="flex flex-wrap items-center gap-2 sm:gap-3">
-            <span class="text-gray-400">OTP: <strong class="text-white">{{ u.otp_count }}</strong></span>
+            <span class="text-slate-400">OTP: <strong class="text-white">{{ u.otp_count }}</strong></span>
             {% if u.api_enabled == 1 %}
               <button type="button" onclick="openApiPermissionModal('{{ u.email }}', 'disable')"
-                      class="px-2.5 py-1 rounded-lg bg-emerald-950 text-emerald-400 border border-emerald-700/40 font-semibold">
+                      class="px-2.5 py-1 rounded-lg bg-cyan-500/10 text-cyan-300 border border-cyan-400/30 font-semibold transition cursor-pointer">
                 API ON
               </button>
             {% else %}
               <button type="button" onclick="openApiPermissionModal('{{ u.email }}', 'enable')"
-                      class="px-2.5 py-1 rounded-lg bg-[#181f1b] hover:bg-[#222c26] text-amber-300 border border-[#2a3630] font-semibold">
+                      class="px-2.5 py-1 rounded-lg bg-[#0b1021] hover:bg-fuchsia-500/15 text-fuchsia-300 border border-fuchsia-400/30 font-semibold transition cursor-pointer">
                 API Perm
               </button>
             {% endif %}
-            <span class="font-semibold {% if u.status == 'ACTIVE' %}text-emerald-400{% elif u.status in ('DEACTIVATED', 'REJECTED') %}text-rose-400{% else %}text-amber-300{% endif %}">
+            <span class="font-semibold {% if u.status == 'ACTIVE' %}text-cyan-300{% elif u.status in ('DEACTIVATED', 'REJECTED') %}text-rose-400{% else %}text-fuchsia-300{% endif %}">
               {{ u.status }}
             </span>
 
@@ -119,28 +146,28 @@
               <form method="POST" action="{{ url_for('agent_decide_user') }}" class="inline">
                 <input type="hidden" name="user_email" value="{{ u.email }}" />
                 <input type="hidden" name="decision" value="approve" />
-                <button type="submit" class="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold">
+                <button type="submit" class="px-3 py-1 rounded-lg bg-gradient-to-r from-blue-600 via-cyan-500 to-teal-400 hover:from-blue-500 hover:to-fuchsia-500 text-white font-semibold transition cursor-pointer">
                   Approve
                 </button>
               </form>
               <form method="POST" action="{{ url_for('agent_decide_user') }}" class="inline">
                 <input type="hidden" name="user_email" value="{{ u.email }}" />
                 <input type="hidden" name="decision" value="reject" />
-                <button type="submit" class="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-semibold">
+                <button type="submit" class="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-semibold transition cursor-pointer">
                   Reject
                 </button>
               </form>
             {% elif u.status == 'ACTIVE' %}
               <form method="POST" action="{{ url_for('agent_toggle_user_status', action='deactivate') }}" class="inline">
                 <input type="hidden" name="user_email" value="{{ u.email }}" />
-                <button type="submit" class="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-semibold">
+                <button type="submit" class="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-semibold transition cursor-pointer">
                   Deactivate
                 </button>
               </form>
             {% elif u.status == 'DEACTIVATED' %}
               <form method="POST" action="{{ url_for('agent_toggle_user_status', action='activate') }}" class="inline">
                 <input type="hidden" name="user_email" value="{{ u.email }}" />
-                <button type="submit" class="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold">
+                <button type="submit" class="px-3 py-1 rounded-lg bg-gradient-to-r from-blue-600 via-cyan-500 to-teal-400 hover:from-blue-500 hover:to-fuchsia-500 text-white font-semibold transition cursor-pointer">
                   Activate
                 </button>
               </form>
@@ -148,7 +175,7 @@
           </div>
         </div>
       {% else %}
-        <div class="text-gray-400">No accounts created with your agent email yet.</div>
+        <div class="text-slate-400">No accounts created with your agent email yet.</div>
       {% endfor %}
     </div>
   </div>
@@ -157,30 +184,32 @@
 <!-- API Permission Modal -->
 <div id="apiPermissionModal"
      onclick="if (event.target === this) closeApiPermissionModal()"
-     class="fixed inset-0 z-50 hidden bg-black/70 items-center justify-center p-4">
-  <div class="card w-full max-w-md rounded-2xl p-5 space-y-4 border border-[#27312c]">
+     class="fixed inset-0 z-50 hidden bg-black/75 backdrop-blur-xs items-center justify-center p-4">
+  <div class="card w-full max-w-md rounded-2xl p-5 space-y-4 bg-[#0b1021]/95 border border-cyan-400/30 shadow-[0_0_40px_rgba(34,211,238,0.15)]">
     <div class="flex items-center justify-between">
-      <h3 id="apiPermTitle" class="text-base font-bold text-white">API Permission</h3>
-      <button type="button" onclick="closeApiPermissionModal()" class="text-xs text-gray-400 hover:text-white">✕</button>
+      <h3 id="apiPermTitle" class="text-base font-bold bg-gradient-to-r from-cyan-300 to-fuchsia-400 bg-clip-text text-transparent">
+        API Permission
+      </h3>
+      <button type="button" onclick="closeApiPermissionModal()" class="text-xs text-slate-400 hover:text-white cursor-pointer">✕</button>
     </div>
-    <p id="apiPermDesc" class="text-xs text-gray-400">
+    <p id="apiPermDesc" class="text-xs text-slate-400">
       Enter the user's account email to activate API access. Once enabled, their API key will appear on their Profile page.
     </p>
     <form method="POST" action="{{ url_for('agent_api_permission') }}" class="space-y-3">
       <select id="apiPermMode" name="mode" onchange="syncApiPermissionCopy()"
-              class="w-full px-3 py-2 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-xs text-gray-200">
+              class="w-full px-3 py-2 rounded-xl bg-[#070b18] border border-slate-700/80 text-xs text-slate-200 focus:outline-none focus:border-cyan-400 transition">
         <option value="enable">Enable API Permission</option>
         <option value="disable">Disable API Permission</option>
       </select>
       <input id="apiPermEmail" type="email" name="user_email" required placeholder="user@example.com"
-             class="w-full px-3.5 py-2.5 rounded-xl bg-[#0c0f0d] border border-[#242d28] text-xs text-white" />
+             class="w-full px-3.5 py-2.5 rounded-xl bg-[#070b18] border border-slate-700/80 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-fuchsia-400 transition" />
       <div class="flex items-center justify-end gap-2 pt-1">
         <button type="button" onclick="closeApiPermissionModal()"
-                class="px-3.5 py-2 rounded-xl bg-[#181f1b] text-xs text-gray-300">
+                class="px-3.5 py-2 rounded-xl bg-[#070b18] border border-slate-700/80 hover:border-slate-500 text-xs text-slate-300 transition cursor-pointer">
           Cancel
         </button>
         <button type="submit" id="apiPermSubmitBtn"
-                class="px-4 py-2 rounded-xl accent-btn text-xs font-semibold text-white">
+                class="px-4 py-2 rounded-xl accent-btn text-xs font-semibold text-white cursor-pointer">
           Confirm
         </button>
       </div>
