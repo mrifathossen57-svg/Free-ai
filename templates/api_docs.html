@@ -142,16 +142,32 @@ print(res.json())</pre>
         </div>
       </section>
 
-      <!-- OTP & Live Console Endpoints -->
+      <!-- Live Access, OTP & Live Console Endpoints -->
       <section id="otp-console" class="card rounded-2xl p-5 space-y-4 scroll-mt-6">
         <div>
-          <h2 class="text-lg font-bold">OTP &amp; Live Console Endpoints</h2>
+          <h2 class="text-lg font-bold">Live Access, OTP &amp; Console Endpoints</h2>
           <p class="text-xs text-gray-400 mt-0.5">
-            Fetch allocated numbers, live incoming OTPs, and console hits using your personal user API key.
+            Fetch live access ranges, allocated numbers, success OTPs, and console hits using your personal user API key.
           </p>
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="p-3.5 rounded-xl bg-[#0b0e0c] border border-[#202824] space-y-2">
+            <div class="flex items-center gap-2">
+              <span class="px-2 py-0.5 rounded bg-sky-950 text-sky-300 border border-sky-700/40 font-mono text-xs font-bold">GET</span>
+              <span class="font-mono text-xs text-gray-200">{{ site_base }}/liveaccess</span>
+            </div>
+            <p class="text-xs text-gray-400">Returns active services and live ranges from the selected/active server.</p>
+          </div>
+
+          <div class="p-3.5 rounded-xl bg-[#0b0e0c] border border-[#202824] space-y-2">
+            <div class="flex items-center gap-2">
+              <span class="px-2 py-0.5 rounded bg-sky-950 text-sky-300 border border-sky-700/40 font-mono text-xs font-bold">GET</span>
+              <span class="font-mono text-xs text-gray-200">{{ site_base }}/success-otp</span>
+            </div>
+            <p class="text-xs text-gray-400">Syncs and returns received OTP messages, OTP logs, and current balance.</p>
+          </div>
+
           <div class="p-3.5 rounded-xl bg-[#0b0e0c] border border-[#202824] space-y-2">
             <div class="flex items-center gap-2">
               <span class="px-2 py-0.5 rounded bg-sky-950 text-sky-300 border border-sky-700/40 font-mono text-xs font-bold">GET</span>
@@ -197,12 +213,22 @@ HEADERS = {"mauthapi": USER_API_KEY, "Content-Type": "application/json"}
 
 @bot.message_handler(commands=["otp"])
 def otp_cmd(msg):
-    r = requests.get(f"{API_BASE}/my-numbers", headers=HEADERS, timeout=15).json()
-    nums = ((r.get("data") or {}).get("numbers") or [])[:5]
-    if not nums:
-        bot.reply_to(msg, "No numbers found.")
+    r = requests.get(f"{API_BASE}/success-otp", headers=HEADERS, timeout=15).json()
+    otps = ((r.get("data") or {}).get("otps") or [])[:5]
+    if not otps:
+        bot.reply_to(msg, "No OTPs found yet.")
         return
-    out = "\n\n".join([f"{n.get('full_number')} -> {n.get('otp_message') or 'Waiting...'}" for n in nums])
+    out = "\n\n".join([f"{o.get('number')} -> {o.get('message')}" for o in otps])
+    bot.reply_to(msg, out)
+
+@bot.message_handler(commands=["live"])
+def live_cmd(msg):
+    r = requests.get(f"{API_BASE}/liveaccess", headers=HEADERS, timeout=15).json()
+    svcs = ((r.get("data") or {}).get("services") or [])[:5]
+    if not svcs:
+        bot.reply_to(msg, "No live access ranges found.")
+        return
+    out = "\n".join([f"{s.get('sid')}: {', '.join((s.get('ranges') or [])[:5])}" for s in svcs])
     bot.reply_to(msg, out)
 
 @bot.message_handler(func=lambda m: bool(m.text and not m.text.startswith("/")))
@@ -224,7 +250,7 @@ bot.infinity_polling(skip_pending=True)</pre>
           <div>
             <h2 class="text-lg font-bold">Master API Playground</h2>
             <p class="text-xs text-gray-400 mt-0.5">
-              Test <code class="text-emerald-300">POST /api/v1/getnum</code> directly with your API key and <code class="text-emerald-300">range</code>.
+              Test your Master API endpoints directly with your API key and parameters.
             </p>
           </div>
           <span id="pgStatusBadge" class="self-start sm:self-auto px-2.5 py-1 rounded-full text-xs font-mono bg-[#181f1b] text-gray-300 border border-[#27312c]">
@@ -247,7 +273,15 @@ bot.infinity_polling(skip_pending=True)</pre>
         </div>
 
         <div class="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-center">
-          <div class="sm:col-span-9 px-3.5 py-2.5 rounded-xl bg-[#0b0e0c] border border-[#242e29] font-mono text-xs sm:text-sm text-emerald-300 truncate">
+          <select id="pgEndpointSelect" onchange="syncPlaygroundEndpoint()"
+                  class="sm:col-span-4 px-3.5 py-2.5 rounded-xl bg-[#0b0e0c] border border-[#242e29] font-mono text-xs sm:text-sm text-sky-300 focus:outline-none focus:border-emerald-500">
+            <option value="POST|/api/v1/getnum" selected>POST /getnum</option>
+            <option value="GET|/api/v1/liveaccess">GET /liveaccess</option>
+            <option value="GET|/api/v1/success-otp">GET /success-otp</option>
+            <option value="GET|/api/v1/console">GET /console</option>
+            <option value="GET|/api/v1/my-numbers">GET /my-numbers</option>
+          </select>
+          <div id="pgEndpointPreview" class="sm:col-span-5 px-3.5 py-2.5 rounded-xl bg-[#0b0e0c] border border-[#242e29] font-mono text-xs sm:text-sm text-emerald-300 truncate">
             POST {{ site_base }}/getnum
           </div>
           <button type="button" onclick="runMasterPlayground()" id="pgRunBtn"
@@ -256,7 +290,7 @@ bot.infinity_polling(skip_pending=True)</pre>
           </button>
         </div>
 
-        <div>
+        <div id="pgBodyWrapper">
           <label class="block text-xs text-gray-400 mb-1.5">Request Body (JSON)</label>
           <textarea id="pgRequestBody" rows="2"
                     class="w-full px-3.5 py-2.5 rounded-xl bg-[#0b0e0c] border border-[#242e29] font-mono text-xs text-emerald-300 focus:outline-none focus:border-emerald-500">{ "range": "26134XXX" }</textarea>
@@ -270,7 +304,7 @@ bot.infinity_polling(skip_pending=True)</pre>
           </div>
           <pre id="pgResponseBox" class="p-3.5 rounded-xl bg-[#0b0e0c] border border-[#202824] font-mono text-xs text-gray-200 overflow-x-auto max-h-72">{
   "ok": true,
-  "message": "Enter your API key and range, then click Run Master API."
+  "message": "Select an endpoint, enter your API key, and click Run Master API."
 }</pre>
         </div>
       </section>
@@ -281,7 +315,7 @@ bot.infinity_polling(skip_pending=True)</pre>
       <div class="card rounded-2xl p-4 lg:sticky lg:top-6 space-y-2">
         <div class="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">On this page</div>
         <a href="#master-endpoint" class="block text-xs py-1 text-gray-300 hover:text-emerald-400">Master Endpoint</a>
-        <a href="#otp-console" class="block text-xs py-1 text-gray-300 hover:text-emerald-400">OTP &amp; Console</a>
+        <a href="#otp-console" class="block text-xs py-1 text-gray-300 hover:text-emerald-400">Live Access, OTP &amp; Console</a>
         <a href="#user-bot" class="block text-xs py-1 text-gray-300 hover:text-emerald-400">User Bot Template</a>
         <a href="#playground" class="block text-xs py-1 text-gray-300 hover:text-emerald-400">Master Playground</a>
         <div class="pt-2 border-t border-[#222b26] text-[11px] text-gray-400 leading-relaxed">
@@ -295,6 +329,8 @@ bot.infinity_polling(skip_pending=True)</pre>
 <div id="docsToast" class="fixed bottom-5 right-5 z-50 hidden px-4 py-2.5 rounded-xl bg-emerald-950 border border-emerald-600/50 text-emerald-200 text-xs font-semibold shadow-lg"></div>
 
 <script>
+  const SITE_BASE_URL = "{{ site_base }}";
+
   function showToast(msg) {
     const el = document.getElementById("docsToast");
     if (!el) return;
@@ -311,8 +347,23 @@ bot.infinity_polling(skip_pending=True)</pre>
     navigator.clipboard?.writeText(text).then(() => showToast(toastMsg)).catch(() => showToast("Copy failed"));
   }
 
+  function syncPlaygroundEndpoint() {
+    const sel = document.getElementById("pgEndpointSelect");
+    const preview = document.getElementById("pgEndpointPreview");
+    const bodyWrap = document.getElementById("pgBodyWrapper");
+    if (!sel || !preview) return;
+    const [method, path] = sel.value.split("|");
+    const suffix = path.replace("/api/v1", "");
+    preview.textContent = `${method} ${SITE_BASE_URL}${suffix}`;
+    if (bodyWrap) {
+      bodyWrap.classList.toggle("hidden", method !== "POST");
+    }
+  }
+
   async function runMasterPlayground() {
     const apiKey = document.getElementById("pgApiKey").value.trim();
+    const selVal = document.getElementById("pgEndpointSelect").value;
+    const [method, url] = selVal.split("|");
     const bodyText = document.getElementById("pgRequestBody").value.trim();
     const badge = document.getElementById("pgStatusBadge");
     const box = document.getElementById("pgResponseBox");
@@ -322,14 +373,17 @@ bot.infinity_polling(skip_pending=True)</pre>
     badge.textContent = "Running...";
 
     try {
-      const res = await fetch("/api/v1/getnum", {
-        method: "POST",
+      const opts = {
+        method,
         headers: {
           "Content-Type": "application/json",
           "mauthapi": apiKey
-        },
-        body: bodyText
-      });
+        }
+      };
+      if (method === "POST") {
+        opts.body = bodyText;
+      }
+      const res = await fetch(url, opts);
       const data = await res.json();
       badge.textContent = `HTTP ${res.status}`;
       box.textContent = JSON.stringify(data, null, 2);
