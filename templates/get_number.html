@@ -301,7 +301,7 @@ const COUNTRY_DIAL_MAP = {
   "998": { flag: "🇺🇿", name: "Uzbekistan" }
 };
 
-function resolveFlagCountry(n) {
+function detectCountryObject(n) {
   const sourceDigits = String(
     n.no_plus_number || n.full_number || n.range || ''
   ).replace(/\D/g, '');
@@ -309,21 +309,20 @@ function resolveFlagCountry(n) {
   for (let len = 3; len >= 1; len--) {
     const prefix = sourceDigits.slice(0, len);
     if (COUNTRY_DIAL_MAP[prefix]) {
-      const c = COUNTRY_DIAL_MAP[prefix];
-      return `${c.flag} ${c.name}`;
+      return COUNTRY_DIAL_MAP[prefix];
     }
   }
 
   const rawCountry = String(n.country || '').trim();
-  if (!rawCountry) return '';
-  if (/^[\u{1F1E6}-\u{1F1FF}]{2}/u.test(rawCountry)) {
-    return rawCountry;
-  }
+  if (!rawCountry) return null;
+
+  const cleanName = rawCountry.replace(/^[\u{1F1E6}-\u{1F1FF}]{2}\s*/u, '').trim();
   const matchedEntry = Object.values(COUNTRY_DIAL_MAP).find(
-    c => c.name.toLowerCase() === rawCountry.toLowerCase() ||
-         c.name.toLowerCase().includes(rawCountry.toLowerCase())
+    c => c.name.toLowerCase() === cleanName.toLowerCase() ||
+         c.name.toLowerCase().includes(cleanName.toLowerCase())
   );
-  return matchedEntry ? `${matchedEntry.flag} ${matchedEntry.name}` : rawCountry;
+
+  return matchedEntry || { flag: '', name: cleanName };
 }
 
 const SAVED_RANGE_KEY = 'saved_getnum_range';
@@ -625,12 +624,14 @@ async function refreshNumbers() {
     if (data.ok) {
       cachedNumbers = (data.numbers || []).map(n => {
         const pKey = normalizeServerKey(n.panel ?? n.panel_key ?? '') || String(n.panel ?? n.panel_key ?? '');
-        const flagCountry = resolveFlagCountry(n);
+        const cObj = detectCountryObject(n);
+        const flagCountry = cObj ? [cObj.flag, cObj.name].filter(Boolean).join(' ') : '';
+        const cleanCountryName = cObj ? cObj.name : (n.country || '');
         return {
           ...n,
           panel_name: SERVER_LABELS[pKey] || (pKey ? `${pKey} server` : ''),
           flag_country: flagCountry,
-          country: flagCountry || n.country || ''
+          clean_country: cleanCountryName
         };
       });
       renderNumbers();
@@ -652,9 +653,12 @@ function renderNumbers() {
       ? `<span class="px-2.5 py-1 rounded-lg bg-rose-950 text-rose-400 text-xs font-semibold">EXPIRED (15m)</span>`
       : `<span class="px-2.5 py-1 rounded-lg bg-amber-950/70 text-amber-300 font-mono text-xs font-semibold">⏳ ${formatTimer(n.remaining_seconds)}</span>`;
 
-    const countryDisplay = n.flag_country || resolveFlagCountry(n);
-    const serverCountryBadge = (n.panel_name || countryDisplay)
-      ? `<span class="px-2.5 py-0.5 rounded-md bg-sky-950/70 text-sky-300 border border-sky-700/40 text-[11px] font-semibold">${escapeHtml([n.panel_name, countryDisplay].filter(Boolean).join(' '))}</span>`
+    const cObj = detectCountryObject(n);
+    const flagCountry = n.flag_country || (cObj ? [cObj.flag, cObj.name].filter(Boolean).join(' ') : '');
+    const cleanCountryName = n.clean_country || (cObj ? cObj.name : (n.country || ''));
+
+    const serverCountryBadge = (n.panel_name || flagCountry)
+      ? `<span class="px-2.5 py-0.5 rounded-md bg-sky-950/70 text-sky-300 border border-sky-700/40 text-[11px] font-semibold">${escapeHtml([n.panel_name, flagCountry].filter(Boolean).join(' '))}</span>`
       : '';
 
     const rangeVal = String(n.range ?? '').trim();
@@ -681,15 +685,11 @@ function renderNumbers() {
         <div class="space-y-1.5">
           <div class="flex items-center gap-2 flex-wrap">
             <span class="font-mono text-lg font-bold text-white">${escapeHtml(n.full_number)}</span>
-            <button type="button" onclick="copyText('${escapeAttr(n.no_plus_number)}', this)"
-                    class="px-2.5 py-1 rounded-lg bg-[#1a221e] text-xs text-emerald-300 hover:bg-[#232e28]">
-              Copy
-            </button>
             ${serverCountryBadge}
             ${timerBadge}
           </div>
           <div class="text-xs text-gray-400">
-            Country: <span class="text-gray-200">${escapeHtml(countryDisplay || n.country)}</span> • Operator: <span class="text-gray-200">${escapeHtml(n.operator)}</span> • Range: ${rangeHtml}
+            Country: <span class="text-gray-200">${escapeHtml(cleanCountryName)}</span> • Operator: <span class="text-gray-200">${escapeHtml(n.operator)}</span> • Range: ${rangeHtml}
           </div>
         </div>
 
