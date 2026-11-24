@@ -62,7 +62,7 @@
 </div>
 
 <script>
-const ACCESS_MAX_AGE_MS = 5 * 60 * 60 * 1000;
+const ACCESS_MAX_AGE_MS = 5 * 60 * 60 * 1000; // ৫ ঘণ্টার পুরনো ডেটা বাদ দেওয়া হবে
 const PANELS_META = {
   "1": { "key": "1", "name": "1 server", "active": {{ "true" if p_map["1"]["active"] else "false" }} },
   "2": { "key": "2", "name": "2 server", "active": {{ "true" if p_map["2"]["active"] else "false" }} },
@@ -73,6 +73,7 @@ const PANELS_META = {
 const PANEL_KEYS_ORDER = ['1', '2', '3', '4', '5'];
 let accessTimer = null;
 
+// Country Dial Code -> Flag & Name Map
 const COUNTRY_DIAL_MAP = {
   "1":   { flag: "🇺🇸", name: "USA / Canada" },
   "7":   { flag: "🇷🇺", name: "Russia" },
