@@ -1,37 +1,44 @@
 {% extends "base.html" %}
-{% block title %}{{ section.label }}{% endblock %}
+{% block title %}{{ section.label if section is defined and section.label is defined else "Access List" }}{% endblock %}
 {% block content %}
-{% set ps = panels_status if panels_status is defined else {} %}
+{% set ps = panels_status if panels_status is defined and panels_status else {} %}
+{% set default_p1 = voltx_panel_active if voltx_panel_active is defined else true %}
+{% set p1_cfg = ps.get("1") if ps.get("1") is defined and ps.get("1") else {} %}
+{% set p2_cfg = ps.get("2") if ps.get("2") is defined and ps.get("2") else {} %}
+{% set p3_cfg = ps.get("3") if ps.get("3") is defined and ps.get("3") else {} %}
+{% set p4_cfg = ps.get("4") if ps.get("4") is defined and ps.get("4") else {} %}
+{% set p5_cfg = ps.get("5") if ps.get("5") is defined and ps.get("5") else {} %}
+
 {% set p_map = {
   "1": {
     "key": "1",
     "name": "1 server",
-    "active": ps.get("1", {}).get("active", voltx_panel_active if voltx_panel_active is defined else true)
+    "active": p1_cfg.get("active", default_p1) if p1_cfg.get("active") is not none else default_p1
   },
   "2": {
     "key": "2",
     "name": "2 server",
-    "active": ps.get("2", {}).get("active", true)
+    "active": p2_cfg.get("active", true) if p2_cfg.get("active") is not none else true
   },
   "3": {
     "key": "3",
     "name": "3 server",
-    "active": ps.get("3", {}).get("active", true)
+    "active": p3_cfg.get("active", true) if p3_cfg.get("active") is not none else true
   },
   "4": {
     "key": "4",
     "name": "4 server",
-    "active": ps.get("4", {}).get("active", true)
+    "active": p4_cfg.get("active", true) if p4_cfg.get("active") is not none else true
   },
   "5": {
     "key": "5",
     "name": "5 server",
-    "active": ps.get("5", {}).get("active", true)
+    "active": p5_cfg.get("active", true) if p5_cfg.get("active") is not none else true
   }
 } %}
 
 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-1">
-  <h1 class="text-2xl font-bold">{{ section.label }}</h1>
+  <h1 class="text-2xl font-bold">{{ section.label if section is defined and section.label is defined else "Access List" }}</h1>
   <span class="text-xs text-gray-500 font-mono">Window: 5h</span>
 </div>
 <p class="text-sm text-gray-400 mb-4">Recently active services and hitting ranges from connected panel (last 5 hours).</p>
@@ -39,7 +46,7 @@
 <!-- Panel Selector Tabs -->
 <div class="flex flex-wrap gap-2 mb-6" id="panel-tabs">
   {% for pk in ["1", "2", "3", "4", "5"] %}
-    {% set p_info = p_map.get(pk, {"key": pk, "name": pk ~ " server", "active": true}) %}
+    {% set p_info = p_map.get(pk) %}
     <button type="button"
             data-panel="{{ pk }}"
             onclick="selectPanel('{{ pk }}')"
@@ -55,12 +62,17 @@
 </div>
 
 <script>
-const ACCESS_MAX_AGE_MS = 5 * 60 * 60 * 1000; // ৫ ঘণ্টার পুরনো ডেটা বাদ দেওয়া হবে
-const PANELS_META = {{ p_map | tojson }};
+const ACCESS_MAX_AGE_MS = 5 * 60 * 60 * 1000;
+const PANELS_META = {
+  "1": { "key": "1", "name": "1 server", "active": {{ "true" if p_map["1"]["active"] else "false" }} },
+  "2": { "key": "2", "name": "2 server", "active": {{ "true" if p_map["2"]["active"] else "false" }} },
+  "3": { "key": "3", "name": "3 server", "active": {{ "true" if p_map["3"]["active"] else "false" }} },
+  "4": { "key": "4", "name": "4 server", "active": {{ "true" if p_map["4"]["active"] else "false" }} },
+  "5": { "key": "5", "name": "5 server", "active": {{ "true" if p_map["5"]["active"] else "false" }} }
+};
 const PANEL_KEYS_ORDER = ['1', '2', '3', '4', '5'];
 let accessTimer = null;
 
-// Country Dial Code -> Flag & Name Map
 const COUNTRY_DIAL_MAP = {
   "1":   { flag: "🇺🇸", name: "USA / Canada" },
   "7":   { flag: "🇷🇺", name: "Russia" },
@@ -331,7 +343,7 @@ function renderAccessOff(msg = 'This panel has been turned off by Admin.') {
   if (box) {
     box.innerHTML = `
       <div class="card rounded-2xl p-6 border border-rose-700/40 bg-rose-950/20 space-y-1">
-        <div class="text-base font-bold text-rose-300">${pName} is OFF</div>
+        <div class="text-base font-bold text-rose-300">${escapeHtml(pName)} is OFF</div>
         <div class="text-xs text-gray-400">${escapeHtml(msg)}</div>
       </div>
     `;
