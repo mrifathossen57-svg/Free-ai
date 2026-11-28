@@ -1,3043 +1,3260 @@
+# -*- coding: utf-8 -*-
+import telebot
+import subprocess
 import os
-import json
+import re
+import sys
+import zipfile
+import tempfile
+import shutil
+from telebot import types
+
+# --- Global button styling (Telegram Bot API 9.4+ / pyTelegramBotAPI with style support) ---
+def _choose_button_style(text="", callback_data=""):
+    """Choose green for positive actions and blue for navigation/information."""
+    key = f"{text} {callback_data}".lower()
+    success_words = (
+        "buy", "upload", "start", "restart", "add", "approve", "confirm",
+        "payment", "pay", "submit", "save", "activate", "success", "renew",
+    )
+    return "success" if any(word in key for word in success_words) else "primary"
+
+
+def _enable_default_button_style(button_class):
+    original_init = button_class.__init__
+    def styled_init(self, *args, **kwargs):
+        text_value = kwargs.get("text", args[0] if args else "")
+        callback_value = kwargs.get("callback_data", "")
+        kwargs.setdefault("style", _choose_button_style(text_value, callback_value))
+        original_init(self, *args, **kwargs)
+    button_class.__init__ = styled_init
+
+
+# Apply to both inline buttons and regular reply-keyboard buttons throughout the file.
+_enable_default_button_style(types.InlineKeyboardButton)
+_enable_default_button_style(types.KeyboardButton)
+# --- End global button styling ---
 import time
-import smtplib
-import secrets
+from datetime import datetime, timedelta
+# Removed unused telegram.* imports as we are using telebot consistently
+# from telegram import Update
+# from telegram.ext import Updater, CommandHandler, CallbackContext
+import psutil
 import sqlite3
+import json # Kept in case needed elsewhere, but not used in provided logic
+import logging # Kept in case needed elsewhere
+import signal # Kept in case needed elsewhere
 import threading
-import requests
-from email.mime.text import MIMEText
-from functools import wraps
-from datetime import datetime
-from flask import (
-    Flask, render_template, request, redirect,
-    url_for, session, flash, jsonify
-)
-from werkzeug.security import generate_password_hash, check_password_hash
+import re # Added for regex matching in auto-install
+import html
+import sys # Added for sys.executable
+import atexit
+import requests # For polling exceptions
 
-try:
-    import firebase_admin
-    from firebase_admin import credentials, firestore
-except ImportError:
-    firebase_admin = None
-    credentials = None
-    firestore = None
+# --- Flask Keep Alive ---
+from flask import Flask
+from threading import Thread
 
-app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
+app = Flask('')
 
-DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel.db"))
+@app.route('/')
+def home():
+    return "I'am Marco File Host"
 
-# ---------------- MASTER API & MULTI-PANEL CONFIG ----------------
-MASTER_API_CONFIG = {
-    "mode": "multi_panel_fallback",
-    "panel_order": ["1", "2", "3", "4", "5"],
-    "endpoints": {
-        "master_getnum": "/api/v1/master/getnum",
-        "get_number": "/getnum",
-        "live_access": "/liveaccess",
-        "success_otp": "/success-otp",
-        "console": "/console",
-    },
-    "mapping": {
-        "list_key": "data.hits",
-        "range": "range",
-        "service": "sid",
-        "time": "time",
-    },
-}
+def run_flask():
+  # Make sure to run on port provided by environment or default to 8080
+  port = int(os.environ.get("PORT", 8080))
+  app.run(host='0.0.0.0', port=port)
 
-PANELS = {
-    "1": {
-        "key": "1",
-        "slug": "panel1",
-        "name": "1 server",
-        "setting_key": "voltx_panel_active",
-        "base_url": os.environ.get(
-            "PANEL1_BASE_URL",
-            "https://api.2oo9.cloud/MXS47FLFX0U/tnevs/@public/api"
-        ).rstrip("/"),
-        "api_key_env": "PANEL1_API_KEY",
-        "fallback_key_env": "UPSTREAM_API_KEY",
-        "auth_header": "mauthapi",
-        "headers": {"mauthapi": os.environ.get("PANEL1_API_KEY", os.environ.get("UPSTREAM_API_KEY", "")).strip()},
-        "endpoint": "/console",
-        "number_endpoint": "/getnum",
-        "mapping": {
-            "list_key": "data.hits",
-            "range": "range",
-            "service": "sid",
-            "time": "time",
-        },
-        "extra_endpoints": {
-            "get_number": "/getnum",
-            "live_access": "/liveaccess",
-            "success_otp": "/success-otp",
-        },
-        "style": "sr1",
-    },
-    "2": {
-        "key": "2",
-        "slug": "panel2",
-        "name": "2 server",
-        "setting_key": "panel_2_active",
-        "base_url": os.environ.get(
-            "PANEL2_BASE_URL",
-            "https://yesms.online/api"
-        ).rstrip("/"),
-        "api_key_env": "PANEL2_API_KEY",
-        "fallback_key_env": "",
-        "auth_header": "authkey",
-        "headers": {"authkey": os.environ.get("PANEL2_API_KEY", "").strip()},
-        "endpoint": "/console_data",
-        "number_endpoint": "/allocate_number",
-        "mapping": {
-            "list_key": "table",
-            "range": "range",
-            "service": "service",
-            "time": "ts",
-        },
-        "extra_endpoints": {
-            "get_number": "/allocate_number",
-            "live_access": "/live_access_data",
-            "success_otp": "/user_numbers",
-        },
-        "style": "yehub",
-    },
-    "3": {
-        "key": "3",
-        "slug": "panel3",
-        "name": "3 server",
-        "setting_key": "panel_3_active",
-        "base_url": os.environ.get(
-            "PANEL3_BASE_URL",
-            "https://slvirtualnumber.com/api/v1/developer"
-        ).rstrip("/"),
-        "api_key_env": "PANEL3_API_KEY",
-        "fallback_key_env": "",
-        "auth_header": "x-api-key",
-        "headers": {"x-api-key": os.environ.get("PANEL3_API_KEY", "").strip()},
-        "endpoint": "/live-console",
-        "number_endpoint": "/rent",
-        "mapping": {
-            "list_key": "data",
-            "range": "rangePrefix",
-            "service": "service",
-            "time": "time",
-        },
-        "extra_endpoints": {
-            "get_number": "/rent",
-            "live_access": "/available-countries",
-            "success_otp": "/otp-monitor",
-        },
-        "style": "slvirtual",
-    },
-    "4": {
-        "key": "4",
-        "slug": "panel4",
-        "name": "4 server",
-        "command": "/ZENEX",
-        "setting_key": "panel_4_active",
-        "base_url": os.environ.get(
-            "PANEL4_BASE_URL",
-            "https://api.zenexnetwork.com"
-        ).rstrip("/"),
-        "api_key_env": "PANEL4_API_KEY",
-        "fallback_key_env": "",
-        "default_api_key": "ZNX_2WQM7CCV7VR8Y5R9P5IVZWDE",
-        "auth_header": "mapikey",
-        "headers": {"mapikey": os.environ.get("PANEL4_API_KEY", "ZNX_4MXS5N5JVJTLLDJY7GM87EKL").strip()},
-        "endpoint": "/v1/active-ranges",
-        "number_endpoint": "/v1/getnum",
-        "otp_endpoint": "/v1/numsuccess/info",
-        "mapping": {
-            "list_key": "data.active_ranges",
-            "range": "range",
-            "service": "service",
-            "time": "created_at",
-        },
-        "extra_endpoints": {
-            "get_number": "/v1/getnum",
-            "live_access": "/v1/active-ranges",
-            "success_otp": "/v1/numsuccess/info",
-        },
-        "style": "zenex",
-    },
-    "5": {
-        "key": "5",
-        "slug": "panel5",
-        "name": "5 server",
-        "setting_key": "panel_5_active",
-        "base_url": os.environ.get(
-            "PANEL5_BASE_URL",
-            "https://api.zebrasms.com/api/v1"
-        ).rstrip("/"),
-        "api_key_env": "PANEL5_API_KEY",
-        "fallback_key_env": "",
-        "default_api_key": "",
-        "auth_header": "MAuth",
-        "headers": {"MAuth": os.environ.get("PANEL5_API_KEY", "").strip()},
-        "endpoint": "/publicapi/getupdate",
-        "number_endpoint": "/publicapi/getnum",
-        "mapping": {
-            "list_key": "data.rows",
-            "range": "range",
-            "service": "sender",
-            "time": "at_ms",
-        },
-        "extra_endpoints": {
-            "get_number": "/publicapi/getnum",
-            "live_access": "/publicapi/liveaccess",
-            "success_otp": "/publicapi/getupdate",
-        },
-        "style": "zebrasms",
-    },
-}
+def keep_alive():
+    t = Thread(target=run_flask)
+    t.daemon = True # Allows program to exit even if this thread is running
+    t.start()
+    print("Flask Keep-Alive server started.")
+# --- End Flask Keep Alive ---
 
+# --- Configuration ---
+BASE_DIR = os.path.abspath(os.path.dirname(__file__)) # Get script's directory
 
-PANEL_BRAND_NAME = PANELS["1"]["name"]
-PANEL_OFF_MSG = f"{PANEL_BRAND_NAME} Panel is currently turned OFF by Admin."
+def _parse_env_text(text):
+    """Tiny .env parser (KEY=VALUE per line, '#' comments, optional quotes). No external dependency."""
+    result = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith('#'): continue
+        if line.lower().startswith('export '): line = line[7:].strip()
+        if '=' not in line: continue
+        key, _, val = line.partition('=')
+        key = key.strip(); val = val.strip()
+        if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key): continue
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"): val = val[1:-1]
+        elif ' #' in val: val = val.split(' #', 1)[0].rstrip()
+        result[key] = val
+    return result
 
-# Backward compatibility constants for Panel 1
-PRIVATE_API_TOKEN = os.environ.get("PANEL1_API_KEY", os.environ.get("UPSTREAM_API_KEY", "")).strip()
-UPSTREAM_BASE_URL = PANELS["1"]["base_url"]
-GETNUM_API_URL = f"{UPSTREAM_BASE_URL}/getnum"
-LIVEACCESS_API_URL = f"{UPSTREAM_BASE_URL}/liveaccess"
-SUCCESS_OTP_API_URL = f"{UPSTREAM_BASE_URL}/success-otp"
-CONSOLE_API_URL = f"{UPSTREAM_BASE_URL}/console"
-
-ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "mdrifatahmmed809@gmail.com").strip().lower()
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "54wx52@@")
-DEFAULT_AGENT_PASS = os.environ.get("AGENT_PASSWORD", "54wx52@@")
-
-SMTP_HOST = os.environ.get("SMTP_HOST", "").strip()
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
-SMTP_USER = os.environ.get("SMTP_USER", "").strip()
-SMTP_PASS = os.environ.get("SMTP_PASS", "").strip()
-BASE_URL = os.environ.get("BASE_URL", "").strip()
-
-DEFAULT_COUNTRY_RATES = {
-    "United Kingdom": 0.0032,
-    "Guinea": 0.0032,
-    "Ivory Coast": 0.0032,
-    "Bangladesh": 0.0032,
-    "Default": 0.0032,
-}
-
-DEFAULT_SERVICE_RATES = {
-    "WhatsApp": 0.0032,
-    "Facebook": 0.0032,
-    "TikTok": 0.0032,
-    "Telegram": 0.0032,
-}
-
-NUMBER_TTL_SECONDS = 15 * 60
-LIVEACCESS_TTL_SECONDS = 5 * 60 * 60
-MAX_ACCOUNTS_PER_AGENT = 200
-
-SIDEBAR_ITEMS = [
-    {"key": "dashboard", "label": "Dashboard", "group": None},
-    {"key": "get-number", "label": "Get Number", "group": "Dialer Panel"},
-    {"key": "console", "label": "Console", "group": "Dialer Panel"},
-    {"key": "access-list", "label": "Access List", "group": "Dialer Panel"},
-    {"key": "profile", "label": "Profile", "group": "Account"},
-    {"key": "payment", "label": "Payment", "group": "Account"},
-    {"key": "api-docs", "label": "API Docs", "group": "Extra"},
-]
-
-
-# ---------------- FIREBASE FIRESTORE HELPERS ----------------
-
-_FIRESTORE_CLIENT = None
-_FIRESTORE_READY = False
-
-
-def get_firestore_client():
-    global _FIRESTORE_CLIENT, _FIRESTORE_READY
-    if _FIRESTORE_READY:
-        return _FIRESTORE_CLIENT
-    _FIRESTORE_READY = True
-
-    if firebase_admin is None or credentials is None or firestore is None:
-        print("Firebase Warning: firebase-admin package is not installed.")
-        return None
-
-    raw_json = os.environ.get("FIREBASE_CREDENTIALS_JSON", "").strip()
-    if not raw_json:
-        print("Firebase Warning: FIREBASE_CREDENTIALS_JSON env var is empty.")
-        return None
-
+def _load_host_env(path):
+    """Load KEY=VALUE pairs from the .env file next to app.py (real environment variables win)."""
+    if not os.path.isfile(path): return
     try:
-        cred_dict = json.loads(raw_json)
-        if not firebase_admin._apps:
-            cred = credentials.Certificate(cred_dict)
-            firebase_admin.initialize_app(cred)
-        _FIRESTORE_CLIENT = firestore.client()
-        return _FIRESTORE_CLIENT
+        with open(path, 'r', encoding='utf-8-sig', errors='ignore') as f:
+            for k, v in _parse_env_text(f.read()).items():
+                os.environ.setdefault(k, v)
     except Exception as e:
-        print("Firebase Init Error:", repr(e))
-        _FIRESTORE_CLIENT = None
-        return None
+        print(f"⚠️ Could not read {path}: {e}")
 
+_load_host_env(os.path.join(BASE_DIR, '.env'))
 
-def fs_set_doc(collection_name: str, doc_id: str, data: dict, merge: bool = True):
-    fs = get_firestore_client()
-    if not fs or not doc_id:
-        return
+TOKEN_PATTERN = re.compile(r'\b\d{6,12}:[A-Za-z0-9_-]{30,}\b')
+
+# টোকেনটি সরাসরি এখানে ফ্যালব্যাক হিসেবে বসানো হয়েছে
+FALLBACK_TOKEN = "8894920799:AAEDSI4AJ5jKQxkADtCiPUdj982MR1CSk8Y"  # <-- নতুন টোকেন দিন
+
+TOKEN = os.environ.get('BOT_TOKEN', '').strip() or FALLBACK_TOKEN.strip()
+
+if not TOKEN_PATTERN.fullmatch(TOKEN):
+    sys.exit("❌ BOT_TOKEN missing/invalid. Create a .env file next to app.py with: BOT_TOKEN=your_token")
+
+def _env_int(name, default):
     try:
-        payload = dict(data)
-        payload["updated_at_ts"] = time.time()
-        fs.collection(collection_name).document(str(doc_id)).set(payload, merge=merge)
-    except Exception as e:
-        print(f"Firestore set error [{collection_name}/{doc_id}]:", repr(e))
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        sys.exit(f"❌ {name} in .env must be a number.")
+
+OWNER_ID = _env_int('OWNER_ID', 6733373257)
+ADMIN_ID = _env_int('ADMIN_ID', 6733373257)
+YOUR_USERNAME = os.environ.get('OWNER_USERNAME', '@sellerbuyer69')
+UPDATE_CHANNEL = os.environ.get('UPDATE_CHANNEL', '@sellerbuyer69')
 
 
-def fs_delete_doc(collection_name: str, doc_id: str):
-    fs = get_firestore_client()
-    if not fs or not doc_id:
-        return
-    try:
-        fs.collection(collection_name).document(str(doc_id)).delete()
-    except Exception as e:
-        print(f"Firestore delete error [{collection_name}/{doc_id}]:", repr(e))
 
+# Folder setup - using absolute paths
+UPLOAD_BOTS_DIR = os.path.join(BASE_DIR, 'upload_bots')   # legacy bots (shared per-user folder)
+INSTANCES_DIR = os.path.join(BASE_DIR, 'bot_instances')   # NEW: one isolated folder per hosted bot
+IROTECH_DIR = os.path.join(BASE_DIR, 'inf') # Assuming this name is intentional
+DATABASE_PATH = os.path.join(IROTECH_DIR, 'bot_data.db')
 
-def sync_user_to_firestore(email: str):
-    if not email:
-        return
-    conn = get_db()
-    row = conn.execute("SELECT * FROM users WHERE email = ?", (email.lower(),)).fetchone()
-    conn.close()
-    if row:
-        fs_set_doc("users", row["email"], dict(row), merge=True)
+# File upload limits
+FREE_USER_LIMIT = 0  # No uploads until an active paid package is approved
+SUBSCRIBED_USER_LIMIT = 15 # Changed from 10 to 15
+ADMIN_LIMIT = 999       # Changed from 50 to 999
+OWNER_LIMIT = float('inf') # Changed from 999 to infinity
 
+# Security limits
+MAX_NAME_LEN = 36                    # keeps Telegram callback_data (<=64 bytes) valid
+MAX_ZIP_FILES = 2000
+MAX_ZIP_UNCOMPRESSED = 200 * 1024 * 1024
+MAX_ENV_BYTES = 64 * 1024
+UPLOAD_COOLDOWN = 3                  # seconds between uploads for normal users
+DB_EXTENSIONS = ('.db', '.sqlite', '.sqlite3', '.db3') # files treated as "database" in Bot Status
 
-def sync_agent_to_firestore(email: str):
-    if not email:
-        return
-    conn = get_db()
-    row = conn.execute("SELECT * FROM agents WHERE email = ?", (email.lower(),)).fetchone()
-    conn.close()
-    if row:
-        fs_set_doc("agents", row["email"], dict(row), merge=True)
+# Create necessary directories
+for _d in (UPLOAD_BOTS_DIR, INSTANCES_DIR, IROTECH_DIR): os.makedirs(_d, exist_ok=True)
+try: # owner-only access on Linux/macOS (ignored on Windows)
+    os.chmod(IROTECH_DIR, 0o700); os.chmod(INSTANCES_DIR, 0o700)
+except OSError: pass
 
+# Initialize bot
+bot = telebot.TeleBot(TOKEN)
 
-def sync_setting_to_firestore(key: str):
-    conn = get_db()
-    row = conn.execute("SELECT * FROM settings WHERE k = ?", (key,)).fetchone()
-    conn.close()
-    if row:
-        fs_set_doc("settings", row["k"], dict(row), merge=True)
+# --- Data structures ---
+bot_scripts = {} # Stores info about running scripts {script_key: info_dict}
+user_subscriptions = {} # {user_id: {'expiry': datetime_object}}
+user_files = {} # {user_id: [(file_name, file_type), ...]}
+active_users = set() # Set of all user IDs that have interacted with the bot
+admin_ids = {ADMIN_ID, OWNER_ID} # Set of admin IDs
+bot_locked = False
+# free_mode = False # Removed free_mode
 
+# --- Logging Setup ---
+# Configure basic logging
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-def sync_withdrawal_to_firestore(req_id: str):
-    conn = get_db()
-    row = conn.execute("SELECT * FROM withdrawals WHERE id = ?", (req_id,)).fetchone()
-    conn.close()
-    if row:
-        fs_set_doc("withdrawals", row["id"], dict(row), merge=True)
-
-
-def sync_payment_address_to_firestore(addr_id: str):
-    conn = get_db()
-    row = conn.execute("SELECT * FROM payment_addresses WHERE id = ?", (addr_id,)).fetchone()
-    conn.close()
-    if row:
-        fs_set_doc("payment_addresses", row["id"], dict(row), merge=True)
-
-
-def sync_user_number_to_firestore(num_id: str):
-    conn = get_db()
-    row = conn.execute("SELECT * FROM user_numbers WHERE id = ?", (num_id,)).fetchone()
-    conn.close()
-    if row:
-        fs_set_doc("user_numbers", row["id"], dict(row), merge=True)
-
-
-def sync_otp_log_to_firestore(log_id: int):
-    conn = get_db()
-    row = conn.execute("SELECT * FROM otp_logs WHERE id = ?", (log_id,)).fetchone()
-    conn.close()
-    if row:
-        d = dict(row)
-        fs_set_doc("otp_logs", str(d["id"]), d, merge=True)
-
-
-def restore_sqlite_from_firestore_if_empty():
-    fs = get_firestore_client()
-    if not fs:
-        return
-    try:
-        conn = get_db()
-        cur = conn.cursor()
-
-        for doc in fs.collection("settings").stream():
-            d = doc.to_dict() or {}
-            k = d.get("k") or doc.id
-            v = d.get("v")
-            if k is not None and v is not None:
-                cur.execute("INSERT OR IGNORE INTO settings (k, v) VALUES (?, ?)", (str(k), str(v)))
-
-        for doc in fs.collection("agents").stream():
-            d = doc.to_dict() or {}
-            em = (d.get("email") or doc.id or "").strip().lower()
-            if em and d.get("password_hash"):
-                cur.execute(
-                    "INSERT OR IGNORE INTO agents (email, password_hash, created_at) VALUES (?, ?, ?)",
-                    (em, d["password_hash"], d.get("created_at") or datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"))
-                )
-
-        for doc in fs.collection("users").stream():
-            d = doc.to_dict() or {}
-            em = (d.get("email") or doc.id or "").strip().lower()
-            if em and d.get("password_hash"):
-                cur.execute("""
-                    INSERT OR IGNORE INTO users (
-                        email, name, agent_email, password_hash, status, uid, api_key,
-                        api_enabled, api_key_created, member_since, last_login, balance,
-                        lifetime_earning, otp_count, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    em,
-                    d.get("name") or em.split("@")[0],
-                    (d.get("agent_email") or "").strip().lower(),
-                    d["password_hash"],
-                    d.get("status") or "ACTIVE",
-                    d.get("uid") or secrets.token_hex(5).upper(),
-                    d.get("api_key"),
-                    int(d.get("api_enabled") or 0),
-                    d.get("api_key_created"),
-                    d.get("member_since"),
-                    d.get("last_login"),
-                    float(d.get("balance") or 0.0),
-                    float(d.get("lifetime_earning") or 0.0),
-                    int(d.get("otp_count") or 0),
-                    d.get("created_at") or datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
-                ))
-
-        for doc in fs.collection("country_rates").stream():
-            d = doc.to_dict() or {}
-            c = d.get("country") or doc.id
-            if c and d.get("rate") is not None:
-                cur.execute("INSERT OR IGNORE INTO country_rates (country, rate) VALUES (?, ?)", (str(c), float(d["rate"])))
-
-        for doc in fs.collection("service_rates").stream():
-            d = doc.to_dict() or {}
-            s = d.get("service") or doc.id
-            if s and d.get("rate") is not None:
-                cur.execute("INSERT OR IGNORE INTO service_rates (service, rate) VALUES (?, ?)", (str(s), float(d["rate"])))
-
-        for doc in fs.collection("otp_rate_limits").stream():
-            d = doc.to_dict() or {}
-            s = d.get("service") or doc.id
-            if s and d.get("max_rate") is not None:
-                cur.execute("INSERT OR IGNORE INTO otp_rate_limits (service, max_rate) VALUES (?, ?)", (str(s), float(d["max_rate"])))
-
-        for doc in fs.collection("withdrawals").stream():
-            d = doc.to_dict() or {}
-            wid = d.get("id") or doc.id
-            if wid and d.get("user_email"):
-                cur.execute("""
-                    INSERT OR IGNORE INTO withdrawals (
-                        id, user_email, user_name, method, wallet_number, amount,
-                        status, reason, created_at, decided_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    str(wid),
-                    (d.get("user_email") or "").strip().lower(),
-                    d.get("user_name") or "",
-                    d.get("method") or "",
-                    d.get("wallet_number") or "",
-                    float(d.get("amount") or 0.0),
-                    d.get("status") or "PENDING",
-                    d.get("reason") or "",
-                    d.get("created_at") or "",
-                    d.get("decided_at") or "",
-                ))
-
-        for doc in fs.collection("payment_addresses").stream():
-            d = doc.to_dict() or {}
-            aid = d.get("id") or doc.id
-            if aid and d.get("user_email"):
-                cur.execute("""
-                    INSERT OR IGNORE INTO payment_addresses (
-                        id, user_email, gateway, label, address, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
-                """, (
-                    str(aid),
-                    (d.get("user_email") or "").strip().lower(),
-                    d.get("gateway") or "",
-                    d.get("label") or "",
-                    d.get("address") or "",
-                    d.get("created_at") or "",
-                ))
-
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print("Firestore restore error:", repr(e))
-
-
-# ---------------- DATABASE HELPERS ----------------
-
-def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def init_db():
-    conn = get_db()
-    cur = conn.cursor()
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS settings (
-            k TEXT PRIMARY KEY,
-            v TEXT NOT NULL
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS agents (
-            email TEXT PRIMARY KEY,
-            password_hash TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            email TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            agent_email TEXT NOT NULL,
-            password_hash TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'ACTIVE',
-            uid TEXT NOT NULL,
-            api_key TEXT,
-            api_enabled INTEGER NOT NULL DEFAULT 0,
-            api_key_created TEXT,
-            member_since TEXT,
-            last_login TEXT,
-            balance REAL NOT NULL DEFAULT 0.0,
-            lifetime_earning REAL NOT NULL DEFAULT 0.0,
-            otp_count INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL
-        )
-    """)
-
-    user_cols = [r["name"] for r in cur.execute("PRAGMA table_info(users)").fetchall()]
-    if "api_enabled" not in user_cols:
-        cur.execute("ALTER TABLE users ADD COLUMN api_enabled INTEGER NOT NULL DEFAULT 0")
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS user_numbers (
-            id TEXT PRIMARY KEY,
-            user_email TEXT NOT NULL,
-            range_val TEXT,
-            full_number TEXT,
-            national_number TEXT,
-            no_plus_number TEXT,
-            country TEXT,
-            operator TEXT,
-            country_rate REAL DEFAULT 0.0,
-            created_ts REAL NOT NULL,
-            expires_ts REAL NOT NULL,
-            otp_message TEXT,
-            earned_amount REAL DEFAULT 0.0,
-            panel_key TEXT DEFAULT '1'
-        )
-    """)
-
-    num_cols = [r["name"] for r in cur.execute("PRAGMA table_info(user_numbers)").fetchall()]
-    if "panel_key" not in num_cols:
-        cur.execute("ALTER TABLE user_numbers ADD COLUMN panel_key TEXT DEFAULT '1'")
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS otp_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at TEXT NOT NULL,
-            created_ts REAL NOT NULL,
-            user_email TEXT NOT NULL,
-            agent_email TEXT NOT NULL,
-            number_val TEXT,
-            country TEXT,
-            service TEXT,
-            rate REAL DEFAULT 0.0,
-            message TEXT,
-            panel_key TEXT DEFAULT '1'
-        )
-    """)
-
-    log_cols = [r["name"] for r in cur.execute("PRAGMA table_info(otp_logs)").fetchall()]
-    if "panel_key" not in log_cols:
-        cur.execute("ALTER TABLE otp_logs ADD COLUMN panel_key TEXT DEFAULT '1'")
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS withdrawals (
-            id TEXT PRIMARY KEY,
-            user_email TEXT NOT NULL,
-            user_name TEXT NOT NULL,
-            method TEXT NOT NULL,
-            wallet_number TEXT NOT NULL,
-            amount REAL NOT NULL,
-            status TEXT NOT NULL DEFAULT 'PENDING',
-            reason TEXT DEFAULT '',
-            created_at TEXT NOT NULL,
-            decided_at TEXT DEFAULT ''
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS payment_addresses (
-            id TEXT PRIMARY KEY,
-            user_email TEXT NOT NULL,
-            gateway TEXT NOT NULL,
-            label TEXT NOT NULL,
-            address TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS country_rates (
-            country TEXT PRIMARY KEY,
-            rate REAL NOT NULL
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS service_rates (
-            service TEXT PRIMARY KEY,
-            rate REAL NOT NULL
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS otp_rate_limits (
-            service TEXT PRIMARY KEY,
-            max_rate REAL NOT NULL
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS agent_service_rates (
-            agent_email TEXT NOT NULL,
-            service TEXT NOT NULL,
-            rate REAL NOT NULL,
-            PRIMARY KEY (agent_email, service)
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS password_resets (
-            email TEXT PRIMARY KEY,
-            code TEXT NOT NULL,
-            expires_ts REAL NOT NULL
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS liveaccess_seen (
-            sid TEXT NOT NULL,
-            range_val TEXT NOT NULL,
-            first_seen_ts REAL NOT NULL,
-            PRIMARY KEY (sid, range_val)
-        )
-    """)
-
-    cur.execute("INSERT OR IGNORE INTO settings (k, v) VALUES ('agent_mail_auto_account', '1')")
-    for p in PANELS.values():
-        cur.execute("INSERT OR IGNORE INTO settings (k, v) VALUES (?, '1')", (p["setting_key"],))
-
-    for c, r in DEFAULT_COUNTRY_RATES.items():
-        cur.execute("INSERT OR IGNORE INTO country_rates (country, rate) VALUES (?, ?)", (c, r))
-
-    for s, r in DEFAULT_SERVICE_RATES.items():
-        cur.execute("INSERT OR IGNORE INTO service_rates (service, rate) VALUES (?, ?)", (s, r))
-
-    conn.commit()
-    conn.close()
-
-    restore_sqlite_from_firestore_if_empty()
-
-    sync_setting_to_firestore("agent_mail_auto_account")
-    for p in PANELS.values():
-        sync_setting_to_firestore(p["setting_key"])
-
-    for c, r in get_country_rates().items():
-        fs_set_doc("country_rates", c, {"country": c, "rate": r}, merge=True)
-    for s, r in get_service_rates().items():
-        fs_set_doc("service_rates", s, {"service": s, "rate": r}, merge=True)
-
-
-# ---------------- PANEL & SETTINGS HELPERS ----------------
-
-def resolve_panel(raw_panel=None) -> dict:
-    val = str(raw_panel or "").strip().lower()
-    if not val:
+class _TokenRedactFilter(logging.Filter):
+    """Never let a bot token reach the log output."""
+    def filter(self, record):
         try:
-            val = str(
-                request.args.get("panel")
-                or request.headers.get("X-Panel")
-                or ((request.get_json(silent=True) or {}).get("panel") if request.is_json else "")
-                or ""
-            ).strip().lower()
-        except RuntimeError:
-            val = ""
-
-    if val in PANELS:
-        return PANELS[val]
-    for p in PANELS.values():
-        aliases = [
-            p["slug"].lower(),
-            p["name"].lower(),
-            f"panel{p['key']}",
-            f"panel_{p['key']}",
-        ]
-        if p.get("command"):
-            aliases.append(p["command"].lstrip("/").lower())
-        if val in aliases:
-            return p
-    return PANELS["1"]
-
-
-def get_panel_active_flag(panel_key: str = "1") -> bool:
-    p = resolve_panel(panel_key)
-    conn = get_db()
-    row = conn.execute("SELECT v FROM settings WHERE k = ?", (p["setting_key"],)).fetchone()
-    conn.close()
-    return (row["v"] == "1") if row else True
-
-
-def set_panel_active_flag(panel_key: str, enabled: bool):
-    p = resolve_panel(panel_key)
-    conn = get_db()
-    conn.execute(
-        "INSERT OR REPLACE INTO settings (k, v) VALUES (?, ?)",
-        (p["setting_key"], "1" if enabled else "0")
-    )
-    conn.commit()
-    conn.close()
-    sync_setting_to_firestore(p["setting_key"])
-
-
-def get_panels_status_map() -> dict:
-    return {
-        p["key"]: {
-            "key": p["key"],
-            "slug": p["slug"],
-            "name": p["name"],
-            "setting_key": p["setting_key"],
-            "active": get_panel_active_flag(p["key"]),
-            "configured": bool(get_api_token(p["key"])),
-        }
-        for p in PANELS.values()
-    }
-
-
-def get_auto_account_flag() -> bool:
-    conn = get_db()
-    row = conn.execute("SELECT v FROM settings WHERE k = 'agent_mail_auto_account'").fetchone()
-    conn.close()
-    return (row["v"] == "1") if row else True
-
-
-def set_auto_account_flag(enabled: bool):
-    conn = get_db()
-    conn.execute(
-        "INSERT OR REPLACE INTO settings (k, v) VALUES ('agent_mail_auto_account', ?)",
-        ("1" if enabled else "0",)
-    )
-    conn.commit()
-    conn.close()
-    sync_setting_to_firestore("agent_mail_auto_account")
-
-
-def get_voltx_panel_flag() -> bool:
-    return get_panel_active_flag("1")
-
-
-def set_voltx_panel_flag(enabled: bool):
-    set_panel_active_flag("1", enabled)
-
-
-def panel_off_json(panel_key: str = "1", status_code: int = 503):
-    p = resolve_panel(panel_key)
-    msg = f"{p['name']} Panel is currently turned OFF by Admin."
-    return jsonify({
-        "meta": {"code": status_code, "status": "off"},
-        "panel": p["key"],
-        "panel_name": p["name"],
-        "voltx_active": get_panel_active_flag("1"),
-        "panel_active": False,
-        "message": msg,
-        "data": {"hits": [], "services": []},
-    }), status_code
-
-
-def get_country_rates() -> dict:
-    conn = get_db()
-    rows = conn.execute("SELECT country, rate FROM country_rates").fetchall()
-    conn.close()
-    return {r["country"]: float(r["rate"]) for r in rows}
-
-
-def get_service_rates() -> dict:
-    conn = get_db()
-    rows = conn.execute("SELECT service, rate FROM service_rates").fetchall()
-    conn.close()
-    return {r["service"]: float(r["rate"]) for r in rows}
-
-
-def get_otp_rate_limits() -> dict:
-    conn = get_db()
-    rows = conn.execute("SELECT service, max_rate FROM otp_rate_limits").fetchall()
-    conn.close()
-    return {r["service"]: float(r["max_rate"]) for r in rows}
-
-
-def get_agent_service_rates(agent_email: str) -> dict:
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT service, rate FROM agent_service_rates WHERE agent_email = ?",
-        ((agent_email or "").strip().lower(),)
-    ).fetchall()
-    conn.close()
-    return {r["service"]: float(r["rate"]) for r in rows}
-
-
-def get_user_dict(email: str):
-    if not email:
-        return None
-    conn = get_db()
-    row = conn.execute("SELECT * FROM users WHERE email = ?", (email.lower(),)).fetchone()
-    conn.close()
-    if not row:
-        return None
-    u = dict(row)
-    u["api_key_visible"] = u.get("api_key") if int(u.get("api_enabled") or 0) else None
-    return u
-
-
-def get_all_users_dict() -> dict:
-    conn = get_db()
-    rows = conn.execute("SELECT * FROM users ORDER BY rowid DESC").fetchall()
-    conn.close()
-    return {r["email"]: dict(r) for r in rows}
-
-
-def get_agent_row(email: str):
-    if not email:
-        return None
-    conn = get_db()
-    row = conn.execute("SELECT * FROM agents WHERE email = ?", (email.lower(),)).fetchone()
-    conn.close()
-    return dict(row) if row else None
-
-
-def ensure_agent_exists(agent_email: str, password_plain: str = None):
-    agent_email = (agent_email or "").strip().lower()
-    if not agent_email:
-        return
-    if not get_agent_row(agent_email):
-        pw = password_plain or DEFAULT_AGENT_PASS
-        conn = get_db()
-        conn.execute(
-            "INSERT OR IGNORE INTO agents (email, password_hash, created_at) VALUES (?, ?, ?)",
-            (agent_email, generate_password_hash(pw), datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"))
-        )
-        conn.commit()
-        conn.close()
-        sync_agent_to_firestore(agent_email)
-
-
-# ---------------- COMMON & UPSTREAM HELPERS ----------------
-
-def get_base_url():
-    if BASE_URL:
-        return BASE_URL.rstrip("/")
-    try:
-        return request.host_url.rstrip("/")
-    except RuntimeError:
-        return ""
-
-
-def get_api_token(panel_key: str = "1") -> str:
-    p = resolve_panel(panel_key)
-    token = os.environ.get(p["api_key_env"], "").strip()
-    if not token and p.get("fallback_key_env"):
-        token = os.environ.get(p["fallback_key_env"], "").strip()
-    if not token and p.get("default_api_key"):
-        token = str(p["default_api_key"]).strip()
-    return token
-
-
-def upstream_headers(token: str = None, panel_key: str = "1") -> dict:
-    p = resolve_panel(panel_key)
-    api_key = (token if token is not None else get_api_token(p["key"])).strip()
-    return {
-        p["auth_header"]: api_key,
-        "Content-Type": "application/json",
-    }
-
-
-def _extract_nested(obj: dict, path_str: str):
-    cur = obj
-    for part in (path_str or "").split("."):
-        if not part:
-            continue
-        if isinstance(cur, dict):
-            cur = cur.get(part)
-        else:
-            return None
-    return cur
-
-
-def _format_ts_or_ms(val) -> str:
-    if val is None or val == "":
-        return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-    try:
-        fval = float(val)
-        if fval > 1e12:
-            fval /= 1000.0
-        return datetime.utcfromtimestamp(fval).strftime("%Y-%m-%d %H:%M:%S UTC")
-    except (ValueError, TypeError, OSError):
-        return str(val)
-
-
-def calculate_rate(country: str, service_sid: str = "", agent_email: str = "") -> float:
-    service_rates = get_service_rates()
-    country_rates = get_country_rates()
-    limits = get_otp_rate_limits()
-
-    if service_sid:
-        svc_key = None
-        for k in service_rates.keys():
-            if k.lower() == service_sid.strip().lower():
-                svc_key = k
-                break
-
-        if agent_email:
-            ag_rates = get_agent_service_rates(agent_email)
-            for ak, ar in ag_rates.items():
-                if ak.lower() == service_sid.strip().lower():
-                    rate_val = float(ar)
-                    for lk, lv in limits.items():
-                        if lk.lower() == service_sid.strip().lower():
-                            rate_val = min(rate_val, float(lv))
-                    return rate_val
-
-        if svc_key:
-            rate_val = float(service_rates[svc_key])
-            for lk, lv in limits.items():
-                if lk.lower() == svc_key.lower():
-                    rate_val = min(rate_val, float(lv))
-            return rate_val
-
-    if country:
-        for k, v in country_rates.items():
-            if k.lower() == country.strip().lower():
-                return float(v)
-    return float(country_rates.get("Default", 0.05))
-
-
-def detect_service_from_message(msg_text: str) -> str:
-    low = (msg_text or "").lower()
-    for s in get_service_rates().keys():
-        if s.lower() in low:
-            return s
-    return "OTP"
-
-
-def send_email_smtp(to_email: str, subject: str, body: str) -> bool:
-    if not (SMTP_HOST and SMTP_USER and SMTP_PASS):
-        print("SMTP Warning: SMTP_HOST, SMTP_USER, or SMTP_PASS is not configured.")
-        return False
-    try:
-        msg = MIMEText(body)
-        msg["Subject"] = subject
-        msg["From"] = SMTP_USER
-        msg["To"] = to_email
-
-        if SMTP_PORT == 465:
-            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=5) as server:
-                server.login(SMTP_USER, SMTP_PASS)
-                server.sendmail(SMTP_USER, [to_email], msg.as_string())
-        else:
-            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=5) as server:
-                server.ehlo()
-                server.starttls()
-                server.ehlo()
-                server.login(SMTP_USER, SMTP_PASS)
-                server.sendmail(SMTP_USER, [to_email], msg.as_string())
+            msg = record.getMessage()
+            red = TOKEN_PATTERN.sub('<redacted-token>', msg)
+            if red != msg:
+                record.msg = red; record.args = ()
+        except Exception: pass
         return True
+
+for _h in logging.getLogger().handlers: _h.addFilter(_TokenRedactFilter())
+logging.getLogger('urllib3').setLevel(logging.WARNING)
+
+# --- Command Button Layouts (ReplyKeyboardMarkup) ---
+# Telegram ReplyKeyboard buttons do not support custom colors/styles.
+COMMAND_BUTTONS_LAYOUT_USER_SPEC = [
+    ["📤 Upload File", "🛒 Buy Package"],
+    ["⚡ Bot Speed", "📂 Check Files"],
+    ["📜 Package History", "📊 Statistics"],
+    ["📞 Contact Owner"],
+]
+ADMIN_COMMAND_BUTTONS_LAYOUT_USER_SPEC = COMMAND_BUTTONS_LAYOUT_USER_SPEC + [["📢 Broadcast", "👑 Admin Panel"]]
+
+# --- Database Setup ---
+def init_db():
+    """Initialize the database with required tables"""
+    logger.info(f"Initializing database at: {DATABASE_PATH}")
+    try:
+        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False) # Allow access from multiple threads
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS subscriptions
+                     (user_id INTEGER PRIMARY KEY, expiry TEXT)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS user_files
+                     (user_id INTEGER, file_name TEXT, file_type TEXT,
+                      PRIMARY KEY (user_id, file_name))''')
+        c.execute('''CREATE TABLE IF NOT EXISTS active_users
+                     (user_id INTEGER PRIMARY KEY)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS user_profiles
+                     (user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, last_seen TEXT)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS admins
+                     (user_id INTEGER PRIMARY KEY)''') # Added admins table
+        # Ensure owner and initial admin are in admins table
+        c.execute('INSERT OR IGNORE INTO admins (user_id) VALUES (?)', (OWNER_ID,))
+        if ADMIN_ID != OWNER_ID:
+             c.execute('INSERT OR IGNORE INTO admins (user_id) VALUES (?)', (ADMIN_ID,))
+        conn.commit()
+        conn.close()
+        logger.info("Database initialized successfully.")
     except Exception as e:
-        print("Email send failed, continuing approval:", repr(e))
+        logger.error(f"❌ Database initialization error: {e}", exc_info=True)
+
+def load_data():
+    """Load data from database into memory"""
+    logger.info("Loading data from database...")
+    try:
+        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
+        c = conn.cursor()
+
+        # Load subscriptions
+        c.execute('SELECT user_id, expiry FROM subscriptions')
+        for user_id, expiry in c.fetchall():
+            try:
+                user_subscriptions[user_id] = {'expiry': datetime.fromisoformat(expiry)}
+            except ValueError:
+                logger.warning(f"⚠️ Invalid expiry date format for user {user_id}: {expiry}. Skipping.")
+
+        # Load user files
+        c.execute('SELECT user_id, file_name, file_type FROM user_files')
+        for user_id, file_name, file_type in c.fetchall():
+            if user_id not in user_files:
+                user_files[user_id] = []
+            user_files[user_id].append((file_name, file_type))
+
+        # Load active users
+        c.execute('SELECT user_id FROM active_users')
+        active_users.update(user_id for (user_id,) in c.fetchall())
+
+        # Load admins
+        c.execute('SELECT user_id FROM admins')
+        admin_ids.update(user_id for (user_id,) in c.fetchall()) # Load admins into the set
+
+        conn.close()
+        logger.info(f"Data loaded: {len(active_users)} users, {len(user_subscriptions)} subscriptions, {len(admin_ids)} admins.")
+    except Exception as e:
+        logger.error(f"❌ Error loading data: {e}", exc_info=True)
+
+# Initialize DB and Load Data at startup
+init_db()
+load_data()
+# --- End Database Setup ---
+
+# --- Helper Functions ---
+def get_user_folder(user_id):
+    """Get or create user's folder for storing files"""
+    user_folder = os.path.join(UPLOAD_BOTS_DIR, str(user_id))
+    os.makedirs(user_folder, exist_ok=True)
+    return user_folder
+
+# --- Per-bot isolated sandbox, .env support, DB export ---
+_SAFE_ENV_KEYS = ('PATH', 'SYSTEMROOT', 'SYSTEMDRIVE', 'COMSPEC', 'PATHEXT', 'WINDIR', 'TEMP', 'TMP', 'TMPDIR',
+                  'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'LANG', 'LC_ALL', 'TZ', 'NODE_PATH',
+                  'VIRTUAL_ENV', 'LD_LIBRARY_PATH', 'SSL_CERT_FILE', 'REQUESTS_CA_BUNDLE',
+                  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy')
+_SKIP_DIRS = {'node_modules', '__pycache__', 'venv', '.venv', '.git', 'site-packages'}
+MAX_TG_UPLOAD = 49 * 1024 * 1024
+_last_upload = {} # {user_id: timestamp} upload throttle
+
+def sanitize_file_name(name):
+    """Strip any path part and unsafe characters from a user-supplied file name."""
+    name = os.path.basename((name or '').replace('\\', '/'))
+    name = re.sub(r'[^A-Za-z0-9._-]', '_', name).lstrip('.')
+    stem, ext = os.path.splitext(name)
+    stem = stem[:max(1, MAX_NAME_LEN - len(ext))] or 'bot'
+    return stem + ext
+
+def get_instance_dir(user_id, file_name, create=False):
+    """Private folder of ONE hosted bot: its script, .env, logs and database all live here."""
+    base = os.path.abspath(os.path.join(INSTANCES_DIR, str(int(user_id))))
+    path = os.path.abspath(os.path.join(base, re.sub(r'[^A-Za-z0-9._-]', '_', file_name)))
+    if os.path.commonpath([base, path]) != base: raise ValueError("Unsafe bot path")
+    if create: os.makedirs(path, exist_ok=True)
+    return path
+
+def is_legacy_bot(user_id, file_name):
+    """Bots hosted before this update live in the shared per-user folder."""
+    in_sandbox = os.path.exists(os.path.join(get_instance_dir(user_id, file_name), file_name))
+    return (not in_sandbox) and os.path.exists(os.path.join(get_user_folder(user_id), file_name))
+
+def resolve_bot_paths(user_id, file_name):
+    """Return (work_dir, script_path) for a hosted bot (sandbox first, legacy folder as fallback)."""
+    inst = get_instance_dir(user_id, file_name)
+    if os.path.exists(os.path.join(inst, file_name)): return inst, os.path.join(inst, file_name)
+    legacy = get_user_folder(user_id)
+    if os.path.exists(os.path.join(legacy, file_name)): return legacy, os.path.join(legacy, file_name)
+    return inst, os.path.join(inst, file_name)
+
+def unique_bot_name(user_id, file_name):
+    """Same script hosted twice (e.g. with another token) => separate instance with its own folder/DB."""
+    existing = {f[0] for f in user_files.get(user_id, [])}
+    if file_name not in existing and not os.path.isdir(get_instance_dir(user_id, file_name)): return file_name
+    stem, ext = os.path.splitext(file_name)
+    n = 2
+    while True:
+        suffix = f"_{n}"
+        cand = stem[:max(1, MAX_NAME_LEN - len(ext) - len(suffix))] + suffix + ext
+        if cand not in existing and not os.path.isdir(get_instance_dir(user_id, cand)): return cand
+        n += 1
+
+def rmtree_force(path, retries=3):
+    def _onerror(func, p, exc_info):
+        try: os.chmod(p, 0o700); func(p)
+        except Exception: pass
+    for _ in range(retries):
+        shutil.rmtree(path, onerror=_onerror)
+        if not os.path.exists(path): return True
+        time.sleep(0.7)
+    return not os.path.exists(path)
+
+# ---- .env per bot ----
+def read_bot_env(env_dir):
+    p = os.path.join(env_dir, '.env')
+    if not os.path.isfile(p): return {}
+    try:
+        with open(p, 'r', encoding='utf-8', errors='ignore') as f: return _parse_env_text(f.read())
+    except Exception as e:
+        logger.error(f"Could not read env file {p}: {e}"); return {}
+
+def write_bot_env(env_dir, env_dict):
+    os.makedirs(env_dir, exist_ok=True)
+    lines = []
+    for k, v in env_dict.items():
+        v = str(v).replace('\r', '').replace('\n', '')
+        lines.append(f'{k}="{v}"' if (' ' in v or '#' in v) else f'{k}={v}')
+    fd = os.open(os.path.join(env_dir, '.env'), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8') as f: f.write("\n".join(lines) + "\n")
+
+def build_child_env(user_id, file_name):
+    """Environment of a hosted script: only harmless system vars + that bot's own .env.
+    The host's own secrets (BOT_TOKEN, OWNER_ID...) are NOT passed on."""
+    env = {k: os.environ[k] for k in _SAFE_ENV_KEYS if k in os.environ}
+    env['PYTHONIOENCODING'] = 'utf-8'; env['PYTHONUNBUFFERED'] = '1'
+    try: env.update(read_bot_env(get_instance_dir(user_id, file_name)))
+    except Exception as e: logger.error(f"build_child_env error for {user_id}/{file_name}: {e}")
+    return env
+
+def script_expects_env(script_path):
+    try:
+        with open(script_path, 'r', encoding='utf-8', errors='ignore') as f: code = f.read(200000)
+    except Exception: return False
+    return bool(re.search(r'os\.environ|os\.getenv|dotenv|process\.env', code))
+
+# ---- database export ----
+def find_bot_db_files(work_dir):
+    found = []
+    if not os.path.isdir(work_dir): return found
+    root_real = os.path.realpath(work_dir)
+    for root, dirs, files in os.walk(work_dir):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS and not os.path.islink(os.path.join(root, d))]
+        for fn in files:
+            if not fn.lower().endswith(DB_EXTENSIONS): continue
+            p = os.path.join(root, fn)
+            if os.path.islink(p): continue # a symlink could point at host files
+            try:
+                if os.path.commonpath([root_real, os.path.realpath(p)]) != root_real: continue
+            except ValueError: continue
+            found.append(p)
+    return sorted(found)
+
+def _snapshot_db(src, dst):
+    """Consistent copy of a (possibly live) SQLite DB; falls back to a plain copy."""
+    try:
+        s = sqlite3.connect(src, timeout=5)
+        try:
+            d = sqlite3.connect(dst)
+            try: s.backup(d)
+            finally: d.close()
+        finally: s.close()
+    except sqlite3.Error:
+        shutil.copy2(src, dst)
+
+def send_bot_databases(chat_id, work_dir, db_files, file_name):
+    sent = 0; skipped = 0
+    tmp_dir = tempfile.mkdtemp(prefix='dbexport_')
+    try:
+        for src in db_files[:10]:
+            rel = os.path.relpath(src, work_dir).replace(os.sep, '__')
+            dst = os.path.join(tmp_dir, rel)
+            try:
+                _snapshot_db(src, dst)
+                if os.path.getsize(dst) > MAX_TG_UPLOAD: skipped += 1; continue
+                with open(dst, 'rb') as fh:
+                    bot.send_document(chat_id, fh, visible_file_name=rel, caption=f"🗄️ {file_name} → {rel}")
+                sent += 1
+            except Exception as e:
+                logger.error(f"DB export failed for {src}: {e}", exc_info=True); skipped += 1
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    extra = f" ({skipped} skipped: too large/error)" if skipped else ""
+    more = f"\nℹ️ Only the first 10 of {len(db_files)} files were sent." if len(db_files) > 10 else ""
+    bot.send_message(chat_id, f"✅ Sent {sent} database file(s) for `{file_name}`{extra}.{more}", parse_mode='Markdown')
+
+def bot_extra_info(user_id, file_name):
+    # Database / Env / Token details are intentionally hidden from the user control panel.
+    return ""
+# --- End sandbox helpers ---
+
+def get_user_file_limit(user_id):
+    """Maximum hosted scripts allowed; an active paid package takes precedence."""
+    if user_id == OWNER_ID: return OWNER_LIMIT
+    if user_id in admin_ids: return ADMIN_LIMIT
+    if _user_package_access_revoked(user_id): return 0
+    try:
+        with sqlite3.connect(DATABASE_PATH) as conn:
+            row = conn.execute("SELECT bot_limit, expiry FROM package_subscriptions WHERE user_id=?", (user_id,)).fetchone()
+        if row and datetime.fromisoformat(row[1]) > datetime.now(): return max(0, int(row[0]))
+    except Exception as e:
+        logger.warning(f"Could not read package limit for {user_id}: {e}")
+    if user_id in user_subscriptions and user_subscriptions[user_id]['expiry'] > datetime.now():
+        return SUBSCRIBED_USER_LIMIT
+    return FREE_USER_LIMIT
+
+def get_user_file_count(user_id):
+    """Get the number of files uploaded by a user"""
+    return len(user_files.get(user_id, []))
+
+def is_bot_running(script_owner_id, file_name): # Parameter renamed for clarity
+    """Check if a bot script is currently running for a specific user"""
+    script_key = f"{script_owner_id}_{file_name}" # Key uses script_owner_id
+    script_info = bot_scripts.get(script_key)
+    if script_info and script_info.get('process'):
+        try:
+            proc = psutil.Process(script_info['process'].pid)
+            is_running = proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE
+            if not is_running:
+                logger.warning(f"Process {script_info['process'].pid} for {script_key} found in memory but not running/zombie. Cleaning up.")
+                if 'log_file' in script_info and hasattr(script_info['log_file'], 'close') and not script_info['log_file'].closed:
+                    try:
+                        script_info['log_file'].close()
+                    except Exception as log_e:
+                        logger.error(f"Error closing log file during zombie cleanup {script_key}: {log_e}")
+                if script_key in bot_scripts:
+                    del bot_scripts[script_key]
+            return is_running
+        except psutil.NoSuchProcess:
+            logger.warning(f"Process for {script_key} not found (NoSuchProcess). Cleaning up.")
+            if 'log_file' in script_info and hasattr(script_info['log_file'], 'close') and not script_info['log_file'].closed:
+                try:
+                     script_info['log_file'].close()
+                except Exception as log_e:
+                     logger.error(f"Error closing log file during cleanup of non-existent process {script_key}: {log_e}")
+            if script_key in bot_scripts:
+                 del bot_scripts[script_key]
+            return False
+        except Exception as e:
+            logger.error(f"Error checking process status for {script_key}: {e}", exc_info=True)
+            return False
+    return False
+
+
+def kill_process_tree(process_info):
+    """Kill a process and all its children, ensuring log file is closed."""
+    pid = None
+    log_file_closed = False
+    script_key = process_info.get('script_key', 'N/A') 
+
+    try:
+        if 'log_file' in process_info and hasattr(process_info['log_file'], 'close') and not process_info['log_file'].closed:
+            try:
+                process_info['log_file'].close()
+                log_file_closed = True
+                logger.info(f"Closed log file for {script_key} (PID: {getattr(process_info.get('process'), 'pid', 'N/A')})")
+            except Exception as log_e:
+                logger.error(f"Error closing log file during kill for {script_key}: {log_e}")
+
+        process = process_info.get('process')
+        if process and hasattr(process, 'pid'):
+           pid = process.pid
+           if pid: 
+                try:
+                    parent = psutil.Process(pid)
+                    children = parent.children(recursive=True)
+                    logger.info(f"Attempting to kill process tree for {script_key} (PID: {pid}, Children: {[c.pid for c in children]})")
+
+                    for child in children:
+                        try:
+                            child.terminate()
+                            logger.info(f"Terminated child process {child.pid} for {script_key}")
+                        except psutil.NoSuchProcess:
+                            logger.warning(f"Child process {child.pid} for {script_key} already gone.")
+                        except Exception as e:
+                            logger.error(f"Error terminating child {child.pid} for {script_key}: {e}. Trying kill...")
+                            try: child.kill(); logger.info(f"Killed child process {child.pid} for {script_key}")
+                            except Exception as e2: logger.error(f"Failed to kill child {child.pid} for {script_key}: {e2}")
+
+                    gone, alive = psutil.wait_procs(children, timeout=1)
+                    for p in alive:
+                        logger.warning(f"Child process {p.pid} for {script_key} still alive. Killing.")
+                        try: p.kill()
+                        except Exception as e: logger.error(f"Failed to kill child {p.pid} for {script_key} after wait: {e}")
+
+                    try:
+                        parent.terminate()
+                        logger.info(f"Terminated parent process {pid} for {script_key}")
+                        try: parent.wait(timeout=1)
+                        except psutil.TimeoutExpired:
+                            logger.warning(f"Parent process {pid} for {script_key} did not terminate. Killing.")
+                            parent.kill()
+                            logger.info(f"Killed parent process {pid} for {script_key}")
+                    except psutil.NoSuchProcess:
+                        logger.warning(f"Parent process {pid} for {script_key} already gone.")
+                    except Exception as e:
+                        logger.error(f"Error terminating parent {pid} for {script_key}: {e}. Trying kill...")
+                        try: parent.kill(); logger.info(f"Killed parent process {pid} for {script_key}")
+                        except Exception as e2: logger.error(f"Failed to kill parent {pid} for {script_key}: {e2}")
+
+                except psutil.NoSuchProcess:
+                    logger.warning(f"Process {pid or 'N/A'} for {script_key} not found during kill. Already terminated?")
+           else: logger.error(f"Process PID is None for {script_key}.")
+        elif log_file_closed: logger.warning(f"Process object missing for {script_key}, but log file closed.")
+        else: logger.error(f"Process object missing for {script_key}, and no log file. Cannot kill.")
+    except Exception as e:
+        logger.error(f"❌ Unexpected error killing process tree for PID {pid or 'N/A'} ({script_key}): {e}", exc_info=True)
+
+# --- Automatic Package Installation & Script Running ---
+
+def attempt_install_pip(module_name, message):
+    module_name = (module_name or '').strip()
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,80}', module_name): # blocks "--index-url ..." style injection
+        logger.warning(f"Refusing to pip install suspicious module name: {module_name!r}")
+        bot.reply_to(message, "❌ Invalid module name. Refusing to install.")
+        return False
+    top_level = module_name.split('.')[0]
+    package_name = TELEGRAM_MODULES.get(module_name.lower(), TELEGRAM_MODULES.get(top_level.lower(), top_level))
+    if package_name is None: 
+        logger.info(f"Module '{module_name}' is core. Skipping pip install.")
+        return False 
+    try:
+        bot.reply_to(message, f"🐍 Module `{module_name}` not found. Installing `{package_name}`...", parse_mode='Markdown')
+        command = [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', package_name]
+        logger.info(f"Running install: {' '.join(command)}")
+        result = subprocess.run(command, capture_output=True, text=True, check=False, encoding='utf-8', errors='ignore')
+        if result.returncode == 0:
+            logger.info(f"Installed {package_name}. Output:\n{result.stdout}")
+            bot.reply_to(message, f"✅ Package `{package_name}` (for `{module_name}`) installed.", parse_mode='Markdown')
+            return True
+        else:
+            error_msg = f"❌ Failed to install `{package_name}` for `{module_name}`.\nLog:\n```\n{result.stderr or result.stdout}\n```"
+            logger.error(error_msg)
+            if len(error_msg) > 4000: error_msg = error_msg[:4000] + "\n... (Log truncated)"
+            bot.reply_to(message, error_msg, parse_mode='Markdown')
+            return False
+    except Exception as e:
+        error_msg = f"❌ Error installing `{package_name}`: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        bot.reply_to(message, error_msg)
         return False
 
-
-def send_agent_mail(user: dict):
-    agent_email = user["agent_email"]
-    login_url = f"{get_base_url()}/login"
-    subject = f"Account Active: {user['name']} ({user['email']})"
-    body = (
-        f"A user account under your agent email is now active.\n\n"
-        f"User Name: {user['name']}\n"
-        f"User Email: {user['email']}\n"
-        f"Status: {user['status']}\n"
-        f"Created At: {user['created_at']}\n\n"
-        f"Login URL: {login_url}\n"
-    )
-    return send_email_smtp(agent_email, subject, body)
-
-
-# ---------------- LOGIN & PUBLIC API GUARDS ----------------
-
-def user_login_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        email = session.get("user_email")
-        user = get_user_dict(email) if email else None
-        if not user:
-            if request.path.startswith("/api/"):
-                return jsonify({"ok": False, "message": "Login required."}), 401
-            flash("Please login to your account first.", "error")
-            return redirect(url_for("login"))
-        if user["status"] != "ACTIVE":
-            session.pop("user_email", None)
-            if request.path.startswith("/api/"):
-                return jsonify({"ok": False, "message": f"Account is {user['status']}."}), 403
-            flash(f"Your account is {user['status']}. Contact Agent/Admin.", "error")
-            return redirect(url_for("login"))
-        return f(user, *args, **kwargs)
-    return decorated
-
-
-def agent_login_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        agent_email = session.get("agent_email")
-        if not agent_email:
-            flash("Agent login required.", "error")
-            return redirect(url_for("login"))
-        return f(agent_email, *args, **kwargs)
-    return decorated
-
-
-def admin_login_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not session.get("is_admin"):
-            flash("Admin login required.", "error")
-            return redirect(url_for("login"))
-        return f(*args, **kwargs)
-    return decorated
-
-
-def public_api_key_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        supplied_key = (
-            request.headers.get("X-API-Key")
-            or request.headers.get("x-api-key")
-            or request.headers.get("authkey")
-            or request.headers.get("mauthapi")
-            or request.headers.get("mapikey")
-            or request.headers.get("MAuth")
-            or request.args.get("api_key")
-            or ((request.get_json(silent=True) or {}).get("api_key") if request.is_json else "")
-            or ""
-        ).strip()
-
-        if not supplied_key:
-            return jsonify({
-                "meta": {"code": 401, "status": "unauthorized"},
-                "message": "API key is missing. Pass x-api-key / authkey / mauthapi / mapikey / MAuth header."
-            }), 401
-
-        conn = get_db()
-        row = conn.execute("SELECT * FROM users WHERE api_key = ?", (supplied_key,)).fetchone()
-        conn.close()
-
-        if not row:
-            return jsonify({
-                "meta": {"code": 403, "status": "forbidden"},
-                "message": "Invalid API key."
-            }), 403
-
-        user = dict(row)
-        if user["status"] != "ACTIVE":
-            return jsonify({
-                "meta": {"code": 403, "status": "forbidden"},
-                "message": f"Account status is {user['status']}."
-            }), 403
-
-        if not int(user.get("api_enabled") or 0):
-            return jsonify({
-                "meta": {"code": 403, "status": "forbidden"},
-                "message": "API permission is not enabled for this account. Contact your Agent."
-            }), 403
-
-        return f(user, *args, **kwargs)
-    return decorated
-
-
-# ---------------- AUTH & FORGOT PASSWORD ----------------
-
-@app.route("/")
-def index():
-    if session.get("is_admin"):
-        return redirect(url_for("admin_panel"))
-    if session.get("agent_email"):
-        return redirect(url_for("agent_panel"))
-    if session.get("user_email") and get_user_dict(session.get("user_email")):
-        return redirect(url_for("dashboard"))
-    return redirect(url_for("login"))
-
-
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    auto_flag = get_auto_account_flag()
-    if request.method == "POST":
-        email = (request.form.get("login") or request.form.get("email") or "").strip().lower()
-        password = request.form.get("password", "")
-
-        if email == ADMIN_EMAIL and password == ADMIN_PASSWORD:
-            session.clear()
-            session["is_admin"] = True
-            return redirect(url_for("admin_panel"))
-
-        agent_row = get_agent_row(email)
-        if agent_row and check_password_hash(agent_row["password_hash"], password):
-            session.clear()
-            session["agent_email"] = email
-            return redirect(url_for("agent_panel"))
-
-        user = get_user_dict(email)
-        if not user or not check_password_hash(user["password_hash"], password):
-            flash("Invalid email or password.", "error")
-            return redirect(url_for("login"))
-
-        if user["status"] == "DEACTIVATED":
-            flash("Your account has been DEACTIVATED by your Agent/Admin.", "error")
-            return redirect(url_for("login"))
-        if user["status"] == "PENDING":
-            flash("Your account is PENDING approval from your Agent.", "error")
-            return redirect(url_for("login"))
-        if user["status"] == "REJECTED":
-            flash("Your account was REJECTED by your Agent.", "error")
-            return redirect(url_for("login"))
-
-        now_dt = datetime.now()
-        last_login_str = now_dt.strftime("%d/%m/%Y, %H:%M:%S")
-        member_since_str = user["member_since"] or now_dt.strftime("%b %Y")
-        api_created_str = user["api_key_created"] or last_login_str
-
-        conn = get_db()
-        conn.execute(
-            "UPDATE users SET last_login = ?, member_since = ?, api_key_created = ? WHERE email = ?",
-            (last_login_str, member_since_str, api_created_str, email)
-        )
-        conn.commit()
-        conn.close()
-        sync_user_to_firestore(email)
-
-        session.clear()
-        session["user_email"] = email
-        return redirect(url_for("dashboard"))
-
-    return render_template("login.html", agent_mail_auto_account=auto_flag)
-
-
-@app.route("/register", methods=["GET", "POST"])
-def register():
-    auto_flag = get_auto_account_flag()
-    if request.method == "POST":
-        name = request.form.get("name", "").strip()
-        email = request.form.get("email", "").strip().lower()
-        agent_email = request.form.get("agent_email", "").strip().lower()
-        password = request.form.get("password", "")
-
-        if not name or not email or not agent_email or not password:
-            flash("All fields are required.", "error")
-            return redirect(url_for("register"))
-
-        if not get_agent_row(agent_email):
-            flash("Agent wrong", "error")
-            return redirect(url_for("register"))
-
-        if get_user_dict(email):
-            flash("An account with this email already exists.", "error")
-            return redirect(url_for("register"))
-
-        conn = get_db()
-        agent_acc_count = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM users WHERE agent_email = ?",
-            (agent_email,)
-        ).fetchone()["cnt"]
-        conn.close()
-
-        if agent_acc_count >= MAX_ACCOUNTS_PER_AGENT:
-            flash(f"Agent '{agent_email}' has reached the maximum limit of {MAX_ACCOUNTS_PER_AGENT} accounts.", "error")
-            return redirect(url_for("register"))
-
-        status = "ACTIVE" if auto_flag else "PENDING"
-        now_dt = datetime.now()
-        now_str = now_dt.strftime("%d/%m/%Y, %H:%M:%S")
-        created_utc = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-
-        user_data = {
-            "email": email,
-            "name": name,
-            "agent_email": agent_email,
-            "password_hash": generate_password_hash(password),
-            "status": status,
-            "uid": secrets.token_hex(5).upper(),
-            "api_key": f"M{secrets.token_hex(6).upper()}",
-            "api_enabled": 0,
-            "api_key_created": now_str,
-            "member_since": now_dt.strftime("%b %Y"),
-            "last_login": now_str,
-            "balance": 0.0,
-            "lifetime_earning": 0.0,
-            "otp_count": 0,
-            "created_at": created_utc,
-        }
-
-        conn = get_db()
-        conn.execute("""
-            INSERT INTO users (
-                email, name, agent_email, password_hash, status, uid, api_key,
-                api_enabled, api_key_created, member_since, last_login, balance,
-                lifetime_earning, otp_count, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            user_data["email"], user_data["name"], user_data["agent_email"],
-            user_data["password_hash"], user_data["status"], user_data["uid"],
-            user_data["api_key"], user_data["api_enabled"], user_data["api_key_created"],
-            user_data["member_since"], user_data["last_login"], user_data["balance"],
-            user_data["lifetime_earning"], user_data["otp_count"], user_data["created_at"]
-        ))
-        conn.commit()
-        conn.close()
-        sync_user_to_firestore(email)
-
-        if auto_flag:
-            send_agent_mail(user_data)
-            session.clear()
-            session["user_email"] = email
-            flash("Account created automatically! Welcome to Dashboard.", "success")
-            return redirect(url_for("dashboard"))
+def attempt_install_npm(module_name, user_folder, message):
+    try:
+        bot.reply_to(message, f"🟠 Node package `{module_name}` not found. Installing locally...", parse_mode='Markdown')
+        command = ['npm', 'install', module_name]
+        logger.info(f"Running npm install: {' '.join(command)} in {user_folder}")
+        result = subprocess.run(command, capture_output=True, text=True, check=False, cwd=user_folder, encoding='utf-8', errors='ignore')
+        if result.returncode == 0:
+            logger.info(f"Installed {module_name}. Output:\n{result.stdout}")
+            bot.reply_to(message, f"✅ Node package `{module_name}` installed locally.", parse_mode='Markdown')
+            return True
         else:
-            flash("Account submitted! Waiting for your Agent's approval.", "success")
-            return redirect(url_for("login"))
-
-    return render_template("register.html", agent_mail_auto_account=auto_flag)
-
-
-@app.route("/forgot-password", methods=["GET", "POST"])
-def forgot_password():
-    step = "request_code"
-    target_email = request.args.get("email", "").strip().lower()
-
-    if request.method == "POST":
-        action = request.form.get("action", "send_code")
-        email = request.form.get("email", "").strip().lower()
-        target_email = email
-
-        if action == "send_code":
-            if not email:
-                flash("Please enter your email address.", "error")
-                return redirect(url_for("forgot_password"))
-
-            user = get_user_dict(email)
-            agent = get_agent_row(email)
-            if not user and not agent:
-                flash("No account found with this email.", "error")
-                return redirect(url_for("forgot_password"))
-
-            code = f"{secrets.randbelow(900000) + 100000}"
-            expires_ts = time.time() + 15 * 60
-
-            conn = get_db()
-            conn.execute(
-                "INSERT OR REPLACE INTO password_resets (email, code, expires_ts) VALUES (?, ?, ?)",
-                (email, code, expires_ts)
-            )
-            conn.commit()
-            conn.close()
-            fs_set_doc("password_resets", email, {"email": email, "code": code, "expires_ts": expires_ts}, merge=True)
-
-            sent = send_email_smtp(
-                email,
-                "Password Reset Verification Code",
-                f"Your password reset code is: {code}\n\nThis code will expire in 15 minutes."
-            )
-            if sent:
-                flash("Verification code sent to your email!", "success")
-            else:
-                flash(f"SMTP not configured. Test Reset Code: {code}", "success")
-            step = "reset_password"
-
-        elif action == "reset_password":
-            code = request.form.get("code", "").strip()
-            new_password = request.form.get("new_password", "")
-            confirm_password = request.form.get("confirm_password", "")
-
-            if not email or not code or not new_password:
-                flash("Email, code, and new password are required.", "error")
-                step = "reset_password"
-            elif new_password != confirm_password:
-                flash("Passwords do not match.", "error")
-                step = "reset_password"
-            else:
-                conn = get_db()
-                row = conn.execute("SELECT * FROM password_resets WHERE email = ?", (email,)).fetchone()
-                if not row or row["code"] != code or time.time() > row["expires_ts"]:
-                    conn.close()
-                    flash("Invalid or expired reset code.", "error")
-                    step = "reset_password"
-                else:
-                    pw_hash = generate_password_hash(new_password)
-                    conn.execute("UPDATE users SET password_hash = ? WHERE email = ?", (pw_hash, email))
-                    conn.execute("UPDATE agents SET password_hash = ? WHERE email = ?", (pw_hash, email))
-                    conn.execute("DELETE FROM password_resets WHERE email = ?", (email,))
-                    conn.commit()
-                    conn.close()
-                    sync_user_to_firestore(email)
-                    sync_agent_to_firestore(email)
-                    fs_delete_doc("password_resets", email)
-                    flash("Password updated successfully! Please login.", "success")
-                    return redirect(url_for("login"))
-
-    return render_template("forgot_password.html", step=step, email=target_email)
-
-
-# ---------------- AGENT PANEL ----------------
-
-@app.route("/agent-panel")
-@agent_login_required
-def agent_panel(agent_email):
-    conn = get_db()
-    agent_users = [dict(r) for r in conn.execute(
-        "SELECT * FROM users WHERE agent_email = ? ORDER BY rowid DESC", (agent_email,)
-    ).fetchall()]
-
-    now_ts = time.time()
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    month_start = now_ts - (30 * 24 * 3600)
-
-    total_otp = conn.execute(
-        "SELECT COUNT(*) AS cnt FROM otp_logs WHERE agent_email = ?", (agent_email,)
-    ).fetchone()["cnt"]
-
-    today_otp = conn.execute(
-        "SELECT COUNT(*) AS cnt FROM otp_logs WHERE agent_email = ? AND created_ts >= ?",
-        (agent_email, today_start)
-    ).fetchone()["cnt"]
-
-    month_otp = conn.execute(
-        "SELECT COUNT(*) AS cnt FROM otp_logs WHERE agent_email = ? AND created_ts >= ?",
-        (agent_email, month_start)
-    ).fetchone()["cnt"]
-
-    conn.close()
-
-    return render_template(
-        "agent_panel.html",
-        agent_email=agent_email,
-        requests_list=agent_users,
-        user_count=len(agent_users),
-        max_accounts_per_agent=MAX_ACCOUNTS_PER_AGENT,
-        total_otp=total_otp,
-        today_otp=today_otp,
-        month_otp=month_otp,
-        otp_rate_limits=get_otp_rate_limits(),
-        agent_service_rates=get_agent_service_rates(agent_email),
-        base_service_rates=get_service_rates(),
-        panel_brand_name=PANEL_BRAND_NAME,
-    )
-
-
-@app.route("/agent/api-permission", methods=["POST"])
-@agent_login_required
-def agent_api_permission(agent_email):
-    user_email = request.form.get("user_email", "").strip().lower()
-    mode = request.form.get("mode", "enable").strip().lower()
-
-    if not user_email:
-        flash("Please enter a user account email.", "error")
-        return redirect(url_for("agent_panel"))
-
-    user = get_user_dict(user_email)
-    if not user:
-        flash(f"No user account found with email '{user_email}'.", "error")
-        return redirect(url_for("agent_panel"))
-
-    if user["agent_email"] != agent_email:
-        flash(f"User '{user_email}' is not under your agent email.", "error")
-        return redirect(url_for("agent_panel"))
-
-    now_str = datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
-    conn = get_db()
-
-    if mode == "disable":
-        conn.execute("UPDATE users SET api_enabled = 0 WHERE email = ?", (user_email,))
-        conn.commit()
-        conn.close()
-        sync_user_to_firestore(user_email)
-        flash(f"API permission disabled for {user_email}.", "success")
-    else:
-        api_key = user.get("api_key") or f"M{secrets.token_hex(6).upper()}"
-        api_created = user.get("api_key_created") or now_str
-        conn.execute(
-            "UPDATE users SET api_enabled = 1, api_key = ?, api_key_created = ? WHERE email = ?",
-            (api_key, api_created, user_email)
-        )
-        conn.commit()
-        conn.close()
-        sync_user_to_firestore(user_email)
-        flash(f"API permission active for {user_email}! API Key is now visible in user's Profile.", "success")
-
-    return redirect(url_for("agent_panel"))
-
-
-@app.route("/agent/decide-user", methods=["POST"])
-@agent_login_required
-def agent_decide_user(agent_email):
-    user_email = request.form.get("user_email", "").strip().lower()
-    decision = request.form.get("decision", "").strip().lower()
-    user = get_user_dict(user_email)
-
-    if not user or user["agent_email"] != agent_email:
-        flash("User not found or not under your agent email.", "error")
-        return redirect(url_for("agent_panel"))
-
-    if user["status"] != "PENDING":
-        flash(f"User {user_email} is already {user['status']}.", "error")
-        return redirect(url_for("agent_panel"))
-
-    if decision == "approve":
-        conn = get_db()
-        conn.execute("UPDATE users SET status = 'ACTIVE' WHERE email = ?", (user_email,))
-        conn.commit()
-        conn.close()
-        sync_user_to_firestore(user_email)
-        user["status"] = "ACTIVE"
-        send_agent_mail(user)
-        flash(f"User {user_email} approved (ACTIVE).", "success")
-    elif decision == "reject":
-        conn = get_db()
-        conn.execute("UPDATE users SET status = 'REJECTED' WHERE email = ?", (user_email,))
-        conn.commit()
-        conn.close()
-        sync_user_to_firestore(user_email)
-        flash(f"User {user_email} rejected.", "success")
-    else:
-        flash("Invalid decision.", "error")
-
-    return redirect(url_for("agent_panel"))
-
-
-@app.route("/agent/set-service-rate", methods=["POST"])
-@agent_login_required
-def agent_set_service_rate(agent_email):
-    service = request.form.get("service", "").strip()
-    try:
-        rate = float(request.form.get("rate", "0"))
-    except ValueError:
-        flash("Invalid rate amount.", "error")
-        return redirect(url_for("agent_panel"))
-
-    if not service or rate < 0:
-        flash("Please provide a valid service name and rate.", "error")
-        return redirect(url_for("agent_panel"))
-
-    limits = get_otp_rate_limits()
-    max_cap = None
-    for k, v in limits.items():
-        if k.lower() == service.lower():
-            max_cap = float(v)
-            break
-
-    if max_cap is not None and rate > max_cap:
-        flash(f"Rate (${rate:.3f}) exceeds Admin max limit (${max_cap:.3f}) for {service}.", "error")
-        return redirect(url_for("agent_panel"))
-
-    conn = get_db()
-    conn.execute(
-        """INSERT INTO agent_service_rates (agent_email, service, rate)
-           VALUES (?, ?, ?)
-           ON CONFLICT(agent_email, service) DO UPDATE SET rate = excluded.rate""",
-        (agent_email.lower(), service, rate)
-    )
-    conn.commit()
-    conn.close()
-    fs_set_doc(
-        "agent_service_rates",
-        f"{agent_email.lower()}__{service.lower()}",
-        {"agent_email": agent_email.lower(), "service": service, "rate": rate},
-        merge=True
-    )
-
-    flash(f"Service rate updated for {service} (${rate:.3f}).", "success")
-    return redirect(url_for("agent_panel"))
-
-
-@app.route("/agent/user/<action>", methods=["POST"])
-@agent_login_required
-def agent_toggle_user_status(agent_email, action):
-    user_email = request.form.get("user_email", "").strip().lower()
-    user = get_user_dict(user_email)
-
-    if not user or user["agent_email"] != agent_email:
-        flash("User not found or not under your agent email.", "error")
-        return redirect(url_for("agent_panel"))
-
-    if action == "deactivate":
-        conn = get_db()
-        conn.execute("UPDATE users SET status = 'DEACTIVATED' WHERE email = ?", (user_email,))
-        conn.commit()
-        conn.close()
-        sync_user_to_firestore(user_email)
-        flash(f"User {user_email} has been deactivated.", "success")
-    elif action == "activate":
-        conn = get_db()
-        conn.execute("UPDATE users SET status = 'ACTIVE' WHERE email = ?", (user_email,))
-        conn.commit()
-        conn.close()
-        sync_user_to_firestore(user_email)
-        flash(f"User {user_email} has been activated.", "success")
-
-    return redirect(url_for("agent_panel"))
-
-
-# ---------------- ADMIN PANEL ----------------
-
-@app.route("/admin")
-@admin_login_required
-def admin_panel():
-    conn = get_db()
-    users_dict = get_all_users_dict()
-    agents_list = [dict(r) for r in conn.execute("SELECT * FROM agents ORDER BY rowid DESC").fetchall()]
-    otp_logs = [dict(r) for r in conn.execute("SELECT * FROM otp_logs ORDER BY id DESC LIMIT 200").fetchall()]
-    withdrawals = [dict(r) for r in conn.execute("SELECT * FROM withdrawals ORDER BY rowid DESC").fetchall()]
-
-    count_rows = conn.execute(
-        "SELECT agent_email, COUNT(*) AS cnt FROM users GROUP BY agent_email"
-    ).fetchall()
-    agent_account_counts = {r["agent_email"]: r["cnt"] for r in count_rows}
-    conn.close()
-
-    panels_status = get_panels_status_map()
-
-    return render_template(
-        "admin_panel.html",
-        agent_mail_auto_account=get_auto_account_flag(),
-        voltx_panel_active=panels_status["1"]["active"],
-        panel_2_active=panels_status["2"]["active"],
-        panel_3_active=panels_status["3"]["active"],
-        panel_4_active=panels_status["4"]["active"],
-        panel_5_active=panels_status["5"]["active"],
-        panels_status=panels_status,
-        panel_brand_name=PANEL_BRAND_NAME,
-        country_rates=get_country_rates(),
-        service_rates=get_service_rates(),
-        otp_rate_limits=get_otp_rate_limits(),
-        otp_logs=otp_logs,
-        withdrawals=withdrawals,
-        users=users_dict,
-        agents=agents_list,
-        agent_account_counts=agent_account_counts,
-        max_accounts_per_agent=MAX_ACCOUNTS_PER_AGENT,
-    )
-
-
-@app.route("/admin/toggle-panel/<panel_key>", methods=["POST"])
-@admin_login_required
-def toggle_any_panel(panel_key):
-    p = resolve_panel(panel_key)
-    new_state = not get_panel_active_flag(p["key"])
-    set_panel_active_flag(p["key"], new_state)
-    state_text = "ON" if new_state else "OFF"
-    flash(f"{p['name']} Panel is now {state_text}.", "success")
-    return redirect(url_for("admin_panel"))
-
-
-@app.route("/admin/toggle-voltx-panel", methods=["POST"])
-@admin_login_required
-def toggle_voltx_panel():
-    return toggle_any_panel("1")
-
-
-@app.route("/admin/add-agent", methods=["POST"])
-@admin_login_required
-def admin_add_agent():
-    agent_email = request.form.get("agent_email", "").strip().lower()
-    agent_pass = request.form.get("agent_password", "").strip() or DEFAULT_AGENT_PASS
-    if not agent_email:
-        flash("Agent email is required.", "error")
-        return redirect(url_for("admin_panel"))
-
-    ensure_agent_exists(agent_email, agent_pass)
-    flash(f"Agent email '{agent_email}' added/available.", "success")
-    return redirect(url_for("admin_panel"))
-
-
-@app.route("/admin/remove-agent", methods=["POST"])
-@admin_login_required
-def admin_remove_agent():
-    agent_email = request.form.get("agent_email", "").strip().lower()
-    if not agent_email:
-        flash("Agent email is required.", "error")
-        return redirect(url_for("admin_panel"))
-
-    conn = get_db()
-    conn.execute("DELETE FROM agents WHERE email = ?", (agent_email,))
-    conn.commit()
-    conn.close()
-    fs_delete_doc("agents", agent_email)
-
-    flash(f"Agent email '{agent_email}' removed.", "success")
-    return redirect(url_for("admin_panel"))
-
-
-@app.route("/admin/toggle-agent-mail-account", methods=["POST"])
-@admin_login_required
-def toggle_agent_mail_account():
-    new_state = not get_auto_account_flag()
-    set_auto_account_flag(new_state)
-    state_text = "ON (Auto Account Creation Active)" if new_state else "OFF (Pending Agent Approval Required)"
-    flash(f"Agent Mail Auto Account is now {state_text}.", "success")
-    return redirect(url_for("admin_panel"))
-
-
-@app.route("/admin/set-country-rate", methods=["POST"])
-@admin_login_required
-def set_country_rate():
-    country = request.form.get("country", "").strip()
-    try:
-        rate = float(request.form.get("rate", "0"))
-    except ValueError:
-        flash("Invalid rate amount.", "error")
-        return redirect(url_for("admin_panel"))
-
-    if country and rate >= 0:
-        conn = get_db()
-        conn.execute("INSERT OR REPLACE INTO country_rates (country, rate) VALUES (?, ?)", (country, rate))
-        conn.commit()
-        conn.close()
-        fs_set_doc("country_rates", country, {"country": country, "rate": rate}, merge=True)
-        flash(f"Country rate updated for {country}.", "success")
-    return redirect(url_for("admin_panel"))
-
-
-@app.route("/admin/set-service-rate", methods=["POST"])
-@admin_login_required
-def set_service_rate():
-    service = request.form.get("service", "").strip()
-    try:
-        rate = float(request.form.get("rate", "0"))
-    except ValueError:
-        flash("Invalid rate amount.", "error")
-        return redirect(url_for("admin_panel"))
-
-    if service and rate >= 0:
-        conn = get_db()
-        conn.execute("INSERT OR REPLACE INTO service_rates (service, rate) VALUES (?, ?)", (service, rate))
-        conn.commit()
-        conn.close()
-        fs_set_doc("service_rates", service, {"service": service, "rate": rate}, merge=True)
-        flash(f"Service rate updated for {service}.", "success")
-    return redirect(url_for("admin_panel"))
-
-
-@app.route("/admin/set-otp-rate-limit", methods=["POST"])
-@admin_login_required
-def set_otp_rate_limit():
-    service = request.form.get("service", "").strip()
-    try:
-        max_rate = float(request.form.get("max_rate", "0"))
-    except ValueError:
-        flash("Invalid max rate amount.", "error")
-        return redirect(url_for("admin_panel"))
-
-    if service and max_rate >= 0:
-        conn = get_db()
-        conn.execute(
-            "INSERT OR REPLACE INTO otp_rate_limits (service, max_rate) VALUES (?, ?)",
-            (service, max_rate)
-        )
-        conn.commit()
-        conn.close()
-        fs_set_doc("otp_rate_limits", service, {"service": service, "max_rate": max_rate}, merge=True)
-        flash(f"OTP rate limit updated for {service}.", "success")
-    return redirect(url_for("admin_panel"))
-
-
-@app.route("/admin/withdraw/<req_id>/<decision>", methods=["POST"])
-@admin_login_required
-def decide_withdraw(req_id, decision):
-    conn = get_db()
-    w = conn.execute("SELECT * FROM withdrawals WHERE id = ?", (req_id,)).fetchone()
-    user_email_to_sync = None
-    if w and w["status"] == "PENDING":
-        user_email_to_sync = w["user_email"]
-        decided_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-        if decision == "approve":
-            conn.execute(
-                "UPDATE withdrawals SET status = 'APPROVED', decided_at = ? WHERE id = ?",
-                (decided_at, req_id)
-            )
-            flash(f"Withdraw {req_id} approved.", "success")
-        elif decision == "reject":
-            reason = request.form.get("reason", "").strip() or "Rejected by Admin."
-            conn.execute(
-                "UPDATE withdrawals SET status = 'REJECTED', reason = ?, decided_at = ? WHERE id = ?",
-                (reason, decided_at, req_id)
-            )
-            conn.execute(
-                "UPDATE users SET balance = ROUND(balance + ?, 4) WHERE email = ?",
-                (float(w["amount"]), w["user_email"])
-            )
-            flash(f"Withdraw {req_id} rejected and balance refunded.", "success")
-        conn.commit()
-    conn.close()
-
-    if w and w["status"] == "PENDING":
-        sync_withdrawal_to_firestore(req_id)
-        if user_email_to_sync:
-            sync_user_to_firestore(user_email_to_sync)
-    return redirect(url_for("admin_panel"))
-
-
-# ---------------- PROFILE API KEY ACTIONS ----------------
-
-@app.route("/api/profile/api-key/<action>", methods=["POST"])
-@user_login_required
-def manage_user_api_key(user, action):
-    if not int(user.get("api_enabled") or 0):
-        return jsonify({
-            "ok": False,
-            "message": "API permission is not enabled for your account. Ask your Agent to click API Permission."
-        }), 403
-
-    now_str = datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
-    conn = get_db()
-    if action == "regenerate":
-        new_key = f"M{secrets.token_hex(6).upper()}"
-        conn.execute(
-            "UPDATE users SET api_key = ?, api_enabled = 1, api_key_created = ? WHERE email = ?",
-            (new_key, now_str, user["email"])
-        )
-        conn.commit()
-        conn.close()
-        sync_user_to_firestore(user["email"])
-        return jsonify({
-            "ok": True,
-            "api_key": new_key,
-            "created_at": now_str,
-            "message": "New API key generated successfully."
-        })
-    elif action == "revoke":
-        conn.execute("UPDATE users SET api_key = NULL, api_enabled = 0 WHERE email = ?", (user["email"],))
-        conn.commit()
-        conn.close()
-        sync_user_to_firestore(user["email"])
-        return jsonify({
-            "ok": True,
-            "api_key": None,
-            "message": "API key has been revoked."
-        })
-    conn.close()
-    return jsonify({"ok": False, "message": "Invalid action."}), 400
-
-
-# ---------------- SHARED NUMBER & OTP LOGIC (MULTI-PANEL + MASTER FALLBACK) ----------------
-
-def _create_number_for_single_panel(user_dict: dict, raw_range: str, panel_key: str = "1"):
-    p = resolve_panel(panel_key)
-    if not get_panel_active_flag(p["key"]):
-        return {"ok": False, "message": f"{p['name']} Panel is currently turned OFF by Admin."}
-
-    api_token = get_api_token(p["key"])
-    if not api_token:
-        return {"ok": False, "message": f"{p['name']} API key is not configured in environment ({p['api_key_env']})."}
-
-    clean_rid = str(raw_range or "").upper().replace("X", "").replace("+", "").strip()
-    if not clean_rid and p["style"] not in ("slvirtual", "zebrasms", "zenex"):
-        return {"ok": False, "message": "Please enter a valid range."}
-
-    expires_ts = None
+            error_msg = f"❌ Failed to install Node package `{module_name}`.\nLog:\n```\n{result.stderr or result.stdout}\n```"
+            logger.error(error_msg)
+            if len(error_msg) > 4000: error_msg = error_msg[:4000] + "\n... (Log truncated)"
+            bot.reply_to(message, error_msg, parse_mode='Markdown')
+            return False
+    except FileNotFoundError:
+         error_msg = "❌ Error: 'npm' not found. Ensure Node.js/npm are installed and in PATH."
+         logger.error(error_msg)
+         bot.reply_to(message, error_msg)
+         return False
+    except Exception as e:
+        error_msg = f"❌ Error installing Node package `{module_name}`: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        bot.reply_to(message, error_msg)
+        return False
+
+def run_script(script_path, script_owner_id, user_folder, file_name, message_obj_for_reply, attempt=1):
+    """Run Python script. script_owner_id is used for the script_key. message_obj_for_reply is for sending feedback."""
+    max_attempts = 2 
+    if attempt > max_attempts:
+        bot.reply_to(message_obj_for_reply, f"❌ Failed to run '{file_name}' after {max_attempts} attempts. Check logs.")
+        return
+
+    script_key = f"{script_owner_id}_{file_name}"
+    logger.info(f"Attempt {attempt} to run Python script: {script_path} (Key: {script_key}) for user {script_owner_id}")
 
     try:
-        if p["style"] == "sr1":
-            num_ep = (p.get("extra_endpoints") or {}).get("get_number") or "/getnum"
-            r = requests.post(
-                f"{p['base_url']}{num_ep}",
-                headers=upstream_headers(api_token, p["key"]),
-                json={"rid": clean_rid},
-                timeout=12,
-            )
-            res_json = r.json()
-            if res_json.get("meta", {}).get("code") != 200 or not res_json.get("data"):
-                return {"ok": False, "message": res_json.get("message", "Out of stock or invalid range.")}
-            data = res_json["data"]
-            full_num = str(data.get("full_number", "")).strip()
-            no_plus = str(data.get("no_plus_number") or full_num.lstrip("+")).strip()
-            nat_num = str(data.get("national_number") or no_plus).strip()
-            country = data.get("country", "Default")
-            operator = data.get("operator", "")
+        if not os.path.exists(script_path):
+             bot.reply_to(message_obj_for_reply, f"❌ Error: Script '{file_name}' not found at '{script_path}'!")
+             logger.error(f"Script not found: {script_path} for user {script_owner_id}")
+             if script_owner_id in user_files:
+                 user_files[script_owner_id] = [f for f in user_files.get(script_owner_id, []) if f[0] != file_name]
+             remove_user_file_db(script_owner_id, file_name)
+             return
 
-        elif p["style"] == "yehub":
-            num_ep = (p.get("extra_endpoints") or {}).get("get_number") or p.get("number_endpoint") or "/allocate_number"
-            r = requests.post(
-                f"{p['base_url']}{num_ep}",
-                headers=upstream_headers(api_token, p["key"]),
-                json={"range_id": str(raw_range or clean_rid).strip()},
-                timeout=12,
-            )
-            res_json = r.json()
-            data = res_json.get("data") if isinstance(res_json.get("data"), dict) else res_json
-            if not res_json.get("success") and not data.get("full_number") and not data.get("national_number"):
-                return {"ok": False, "message": res_json.get("message", "Out of stock or invalid range.")}
-            nat_num = str(data.get("national_number") or data.get("number") or "").strip()
-            full_num = str(data.get("full_number") or (f"+{nat_num.lstrip('+')}" if nat_num else "")).strip()
-            no_plus = str(data.get("no_plus_number") or full_num.lstrip("+")).strip()
-            country = data.get("country", "Default")
-            operator = data.get("operator", "")
-
-        elif p["style"] == "slvirtual":
-            num_ep = (p.get("extra_endpoints") or {}).get("get_number") or p.get("number_endpoint") or "/rent"
-            payload_body = {}
-            if clean_rid:
-                payload_body["rangePrefix"] = clean_rid
-            payload_body["service"] = "ANY"
-            r = requests.post(
-                f"{p['base_url']}{num_ep}",
-                headers=upstream_headers(api_token, p["key"]),
-                json=payload_body,
-                timeout=12,
-            )
-            res_json = r.json()
-            data = res_json.get("data") if isinstance(res_json.get("data"), dict) else {}
-            full_num = str(data.get("phoneNumber") or data.get("full_number") or "").strip()
-            if not full_num:
-                return {"ok": False, "message": res_json.get("message", "Out of stock or invalid range.")}
-            no_plus = full_num.lstrip("+")
-            nat_num = no_plus
-            country = data.get("country", "Default")
-            operator = data.get("tag", "")
-
-        elif p["style"] == "zebrasms":
-            num_ep = (p.get("extra_endpoints") or {}).get("get_number") or p.get("number_endpoint") or "/publicapi/getnum"
-            req_range = str(raw_range or "").strip()
-            if not req_range and clean_rid:
-                req_range = f"{clean_rid}XXX"
-            payload_body = {"range": req_range} if req_range else {}
-            r = requests.post(
-                f"{p['base_url']}{num_ep}",
-                headers=upstream_headers(api_token, p["key"]),
-                json=payload_body,
-                timeout=12,
-            )
-            res_json = r.json()
-            meta_code = (res_json.get("meta") or {}).get("code")
-            rows = ((res_json.get("data") or {}).get("rows")) or []
-            if meta_code != 0 or not rows:
-                return {"ok": False, "message": res_json.get("message") or "Out of stock or invalid range."}
-            row0 = rows[0] if isinstance(rows[0], dict) else {}
-            full_num = str(row0.get("number") or "").strip()
-            if not full_num:
-                return {"ok": False, "message": res_json.get("message") or "No number returned by ZebraSMS."}
-            no_plus = full_num.lstrip("+")
-            nat_num = no_plus
-            country = str(row0.get("country") or "Default")
-            operator = str(row0.get("operator") or "")
-            if row0.get("range"):
-                raw_range = str(row0.get("range")).strip()
-            if row0.get("expires_ms"):
-                try:
-                    exp_val = float(row0.get("expires_ms"))
-                    if exp_val > 1e12:
-                        exp_val /= 1000.0
-                    if exp_val > time.time():
-                        expires_ts = exp_val
-                except (ValueError, TypeError):
-                    pass
-
-        elif p["style"] == "zenex":
-            num_ep = (p.get("extra_endpoints") or {}).get("get_number") or p.get("number_endpoint") or "/v1/getnum"
-            req_range = str(raw_range or clean_rid).strip()
-            payload_body = {
-                "is_national": False,
-                "remove_plus": False,
-            }
-            if req_range:
-                payload_body["range"] = req_range
-
-            r = requests.post(
-                f"{p['base_url']}{num_ep}",
-                headers=upstream_headers(api_token, p["key"]),
-                json=payload_body,
-                timeout=12,
-            )
+        if attempt == 1:
+            check_command = [sys.executable, script_path]
+            logger.info(f"Running Python pre-check: {' '.join(check_command)}")
+            check_proc = None
             try:
-                res_json = r.json()
-            except ValueError:
-                return {"ok": False, "message": f"Zenex invalid JSON (HTTP {r.status_code}): {r.text[:150]}"}
+                check_proc = subprocess.Popen(check_command, cwd=user_folder, env=build_child_env(script_owner_id, file_name), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='ignore')
+                stdout, stderr = check_proc.communicate(timeout=5)
+                return_code = check_proc.returncode
+                logger.info(f"Python Pre-check early. RC: {return_code}. Stderr: {stderr[:200]}...")
+                if return_code != 0 and stderr:
+                    match_py = re.search(r"ModuleNotFoundError: No module named '(.+?)'", stderr)
+                    if match_py:
+                        module_name = match_py.group(1).strip().strip("'\"")
+                        logger.info(f"Detected missing Python module: {module_name}")
+                        if attempt_install_pip(module_name, message_obj_for_reply):
+                            logger.info(f"Install OK for {module_name}. Retrying run_script...")
+                            bot.reply_to(message_obj_for_reply, f"🔄 Install successful. Retrying '{file_name}'...")
+                            time.sleep(2)
+                            threading.Thread(target=run_script, args=(script_path, script_owner_id, user_folder, file_name, message_obj_for_reply, attempt + 1)).start()
+                            return
+                        else:
+                            bot.reply_to(message_obj_for_reply, f"❌ Install failed. Cannot run '{file_name}'.")
+                            return
+                    else:
+                         error_summary = stderr[:500]
+                         bot.reply_to(message_obj_for_reply, f"❌ Error in script pre-check for '{file_name}':\n```\n{error_summary}\n```\nFix the script.", parse_mode='Markdown')
+                         return
+            except subprocess.TimeoutExpired:
+                logger.info("Python Pre-check timed out (>5s), imports likely OK. Killing check process.")
+                if check_proc and check_proc.poll() is None: check_proc.kill(); check_proc.communicate()
+                logger.info("Python Check process killed. Proceeding to long run.")
+            except FileNotFoundError:
+                 logger.error(f"Python interpreter not found: {sys.executable}")
+                 bot.reply_to(message_obj_for_reply, f"❌ Error: Python interpreter '{sys.executable}' not found.")
+                 return
+            except Exception as e:
+                 logger.error(f"Error in Python pre-check for {script_key}: {e}", exc_info=True)
+                 bot.reply_to(message_obj_for_reply, f"❌ Unexpected error in script pre-check for '{file_name}': {e}")
+                 return
+            finally:
+                 if check_proc and check_proc.poll() is None:
+                     logger.warning(f"Python Check process {check_proc.pid} still running. Killing.")
+                     check_proc.kill(); check_proc.communicate()
 
-            if not isinstance(res_json, dict):
-                return {"ok": False, "message": f"Zenex unexpected response (HTTP {r.status_code})."}
-
-            meta = res_json.get("meta") if isinstance(res_json.get("meta"), dict) else {}
-            meta_code = meta.get("code")
-            meta_status = str(meta.get("status") or "").lower()
-            top_status = str(res_json.get("status") or "").lower()
-
-            data = res_json.get("data") if isinstance(res_json.get("data"), dict) else res_json
-            full_num = str(
-                data.get("full_number")
-                or data.get("number")
-                or data.get("copy")
-                or data.get("phone")
-                or ""
-            ).strip()
-
-            explicit_fail = (
-                res_json.get("success") is False
-                or (meta_code is not None and meta_code not in (0, 200, "0", "200"))
-                or (meta_status and meta_status not in ("success", "ok"))
-                or (top_status and top_status not in ("success", "ok"))
+        logger.info(f"Starting long-running Python process for {script_key}")
+        log_file_path = os.path.join(user_folder, f"{os.path.splitext(file_name)[0]}.log")
+        log_file = None; process = None
+        try: log_file = open(log_file_path, 'w', encoding='utf-8', errors='ignore')
+        except Exception as e:
+             logger.error(f"Failed to open log file '{log_file_path}' for {script_key}: {e}", exc_info=True)
+             bot.reply_to(message_obj_for_reply, f"❌ Failed to open log file '{log_file_path}': {e}")
+             return
+        try:
+            startupinfo = None; creationflags = 0
+            if os.name == 'nt':
+                 startupinfo = subprocess.STARTUPINFO(); startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                 startupinfo.wShowWindow = subprocess.SW_HIDE
+            process = subprocess.Popen(
+                [sys.executable, script_path], cwd=user_folder, env=build_child_env(script_owner_id, file_name), stdout=log_file, stderr=log_file,
+                stdin=subprocess.PIPE, startupinfo=startupinfo, creationflags=creationflags,
+                encoding='utf-8', errors='ignore'
             )
+            logger.info(f"Started Python process {process.pid} for {script_key}")
+            bot_scripts[script_key] = {
+                'process': process, 'log_file': log_file, 'file_name': file_name,
+                'chat_id': message_obj_for_reply.chat.id, # Chat ID for potential future direct replies from script, defaults to admin/triggering user
+                'script_owner_id': script_owner_id, # Actual owner of the script
+                'start_time': datetime.now(), 'user_folder': user_folder, 'type': 'py', 'script_key': script_key
+            }
+            bot.reply_to(message_obj_for_reply, f"✅ Python script '{file_name}' started! (PID: {process.pid}) (For User: {script_owner_id})")
+        except FileNotFoundError:
+             logger.error(f"Python interpreter {sys.executable} not found for long run {script_key}")
+             bot.reply_to(message_obj_for_reply, f"❌ Error: Python interpreter '{sys.executable}' not found.")
+             if log_file and not log_file.closed: log_file.close()
+             if script_key in bot_scripts: del bot_scripts[script_key]
+        except Exception as e:
+            if log_file and not log_file.closed: log_file.close()
+            error_msg = f"❌ Error starting Python script '{file_name}': {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            bot.reply_to(message_obj_for_reply, error_msg)
+            if process and process.poll() is None:
+                 logger.warning(f"Killing potentially started Python process {process.pid} for {script_key}")
+                 kill_process_tree({'process': process, 'log_file': log_file, 'script_key': script_key})
+            if script_key in bot_scripts: del bot_scripts[script_key]
+    except Exception as e:
+        error_msg = f"❌ Unexpected error running Python script '{file_name}': {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        bot.reply_to(message_obj_for_reply, error_msg)
+        if script_key in bot_scripts:
+             logger.warning(f"Cleaning up {script_key} due to error in run_script.")
+             kill_process_tree(bot_scripts[script_key])
+             del bot_scripts[script_key]
 
-            if explicit_fail or not full_num:
-                err_msg = (
-                    res_json.get("message")
-                    or res_json.get("error")
-                    or meta.get("message")
-                    or f"Zenex getnum failed (HTTP {r.status_code})"
-                )
-                return {"ok": False, "message": err_msg}
+def run_js_script(script_path, script_owner_id, user_folder, file_name, message_obj_for_reply, attempt=1):
+    """Run JS script. script_owner_id is used for the script_key. message_obj_for_reply is for sending feedback."""
+    max_attempts = 2
+    if attempt > max_attempts:
+        bot.reply_to(message_obj_for_reply, f"❌ Failed to run '{file_name}' after {max_attempts} attempts. Check logs.")
+        return
 
-            if not full_num.startswith("+"):
-                full_num = f"+{full_num}"
-            no_plus = full_num.lstrip("+")
-            nat_num = str(data.get("national_number") or no_plus).strip()
-            country = str(data.get("country") or "Default")
-            operator = str(data.get("operator") or "")
+    script_key = f"{script_owner_id}_{file_name}"
+    logger.info(f"Attempt {attempt} to run JS script: {script_path} (Key: {script_key}) for user {script_owner_id}")
 
+    try:
+        if not os.path.exists(script_path):
+             bot.reply_to(message_obj_for_reply, f"❌ Error: Script '{file_name}' not found at '{script_path}'!")
+             logger.error(f"JS Script not found: {script_path} for user {script_owner_id}")
+             if script_owner_id in user_files:
+                 user_files[script_owner_id] = [f for f in user_files.get(script_owner_id, []) if f[0] != file_name]
+             remove_user_file_db(script_owner_id, file_name)
+             return
+
+        if attempt == 1:
+            check_command = ['node', script_path]
+            logger.info(f"Running JS pre-check: {' '.join(check_command)}")
+            check_proc = None
+            try:
+                check_proc = subprocess.Popen(check_command, cwd=user_folder, env=build_child_env(script_owner_id, file_name), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='ignore')
+                stdout, stderr = check_proc.communicate(timeout=5)
+                return_code = check_proc.returncode
+                logger.info(f"JS Pre-check early. RC: {return_code}. Stderr: {stderr[:200]}...")
+                if return_code != 0 and stderr:
+                    match_js = re.search(r"Cannot find module '(.+?)'", stderr)
+                    if match_js:
+                        module_name = match_js.group(1).strip().strip("'\"")
+                        if not module_name.startswith('.') and not module_name.startswith('/'):
+                             logger.info(f"Detected missing Node module: {module_name}")
+                             if attempt_install_npm(module_name, user_folder, message_obj_for_reply):
+                                 logger.info(f"NPM Install OK for {module_name}. Retrying run_js_script...")
+                                 bot.reply_to(message_obj_for_reply, f"🔄 NPM Install successful. Retrying '{file_name}'...")
+                                 time.sleep(2)
+                                 threading.Thread(target=run_js_script, args=(script_path, script_owner_id, user_folder, file_name, message_obj_for_reply, attempt + 1)).start()
+                                 return
+                             else:
+                                 bot.reply_to(message_obj_for_reply, f"❌ NPM Install failed. Cannot run '{file_name}'.")
+                                 return
+                        else: logger.info(f"Skipping npm install for relative/core: {module_name}")
+                    error_summary = stderr[:500]
+                    bot.reply_to(message_obj_for_reply, f"❌ Error in JS script pre-check for '{file_name}':\n```\n{error_summary}\n```\nFix script or install manually.", parse_mode='Markdown')
+                    return
+            except subprocess.TimeoutExpired:
+                logger.info("JS Pre-check timed out (>5s), imports likely OK. Killing check process.")
+                if check_proc and check_proc.poll() is None: check_proc.kill(); check_proc.communicate()
+                logger.info("JS Check process killed. Proceeding to long run.")
+            except FileNotFoundError:
+                 error_msg = "❌ Error: 'node' not found. Ensure Node.js is installed for JS files."
+                 logger.error(error_msg)
+                 bot.reply_to(message_obj_for_reply, error_msg)
+                 return
+            except Exception as e:
+                 logger.error(f"Error in JS pre-check for {script_key}: {e}", exc_info=True)
+                 bot.reply_to(message_obj_for_reply, f"❌ Unexpected error in JS pre-check for '{file_name}': {e}")
+                 return
+            finally:
+                 if check_proc and check_proc.poll() is None:
+                     logger.warning(f"JS Check process {check_proc.pid} still running. Killing.")
+                     check_proc.kill(); check_proc.communicate()
+
+        logger.info(f"Starting long-running JS process for {script_key}")
+        log_file_path = os.path.join(user_folder, f"{os.path.splitext(file_name)[0]}.log")
+        log_file = None; process = None
+        try: log_file = open(log_file_path, 'w', encoding='utf-8', errors='ignore')
+        except Exception as e:
+            logger.error(f"Failed to open log file '{log_file_path}' for JS script {script_key}: {e}", exc_info=True)
+            bot.reply_to(message_obj_for_reply, f"❌ Failed to open log file '{log_file_path}': {e}")
+            return
+        try:
+            startupinfo = None; creationflags = 0
+            if os.name == 'nt':
+                 startupinfo = subprocess.STARTUPINFO(); startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                 startupinfo.wShowWindow = subprocess.SW_HIDE
+            process = subprocess.Popen(
+                ['node', script_path], cwd=user_folder, env=build_child_env(script_owner_id, file_name), stdout=log_file, stderr=log_file,
+                stdin=subprocess.PIPE, startupinfo=startupinfo, creationflags=creationflags,
+                encoding='utf-8', errors='ignore'
+            )
+            logger.info(f"Started JS process {process.pid} for {script_key}")
+            bot_scripts[script_key] = {
+                'process': process, 'log_file': log_file, 'file_name': file_name,
+                'chat_id': message_obj_for_reply.chat.id, # Chat ID for potential future direct replies
+                'script_owner_id': script_owner_id, # Actual owner of the script
+                'start_time': datetime.now(), 'user_folder': user_folder, 'type': 'js', 'script_key': script_key
+            }
+            bot.reply_to(message_obj_for_reply, f"✅ JS script '{file_name}' started! (PID: {process.pid}) (For User: {script_owner_id})")
+        except FileNotFoundError:
+             error_msg = "❌ Error: 'node' not found for long run. Ensure Node.js is installed."
+             logger.error(error_msg)
+             if log_file and not log_file.closed: log_file.close()
+             bot.reply_to(message_obj_for_reply, error_msg)
+             if script_key in bot_scripts: del bot_scripts[script_key]
+        except Exception as e:
+            if log_file and not log_file.closed: log_file.close()
+            error_msg = f"❌ Error starting JS script '{file_name}': {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            bot.reply_to(message_obj_for_reply, error_msg)
+            if process and process.poll() is None:
+                 logger.warning(f"Killing potentially started JS process {process.pid} for {script_key}")
+                 kill_process_tree({'process': process, 'log_file': log_file, 'script_key': script_key})
+            if script_key in bot_scripts: del bot_scripts[script_key]
+    except Exception as e:
+        error_msg = f"❌ Unexpected error running JS script '{file_name}': {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        bot.reply_to(message_obj_for_reply, error_msg)
+        if script_key in bot_scripts:
+             logger.warning(f"Cleaning up {script_key} due to error in run_js_script.")
+             kill_process_tree(bot_scripts[script_key])
+             del bot_scripts[script_key]
+
+# --- Map Telegram import names to actual PyPI package names ---
+TELEGRAM_MODULES = {
+    # Main Bot Frameworks
+    'telebot': 'pyTelegramBotAPI',
+    'telegram': 'python-telegram-bot',
+    'python_telegram_bot': 'python-telegram-bot',
+    'aiogram': 'aiogram',
+    'pyrogram': 'pyrogram',
+    'telethon': 'telethon',
+    'telethon.sync': 'telethon', # Handle specific imports
+    'from telethon.sync import telegramclient': 'telethon', # Example
+
+    # Additional Libraries (add more specific mappings if import name differs)
+    'telepot': 'telepot',
+    'pytg': 'pytg',
+    'tgcrypto': 'tgcrypto',
+    'telegram_upload': 'telegram-upload',
+    'telegram_send': 'telegram-send',
+    'telegram_text': 'telegram-text',
+
+    # MTProto & Low-Level
+    'mtproto': 'telegram-mtproto', # Example, check actual package name
+    'tl': 'telethon',  # Part of Telethon, install 'telethon'
+
+    # Utilities & Helpers (examples, verify package names)
+    'telegram_utils': 'telegram-utils',
+    'telegram_logger': 'telegram-logger',
+    'telegram_handlers': 'python-telegram-handlers',
+
+    # Database Integrations (examples)
+    'telegram_redis': 'telegram-redis',
+    'telegram_sqlalchemy': 'telegram-sqlalchemy',
+
+    # Payment & E-commerce (examples)
+    'telegram_payment': 'telegram-payment',
+    'telegram_shop': 'telegram-shop-sdk',
+
+    # Testing & Debugging (examples)
+    'pytest_telegram': 'pytest-telegram',
+    'telegram_debug': 'telegram-debug',
+
+    # Scraping & Analytics (examples)
+    'telegram_scraper': 'telegram-scraper',
+    'telegram_analytics': 'telegram-analytics',
+
+    # NLP & AI (examples)
+    'telegram_nlp': 'telegram-nlp-toolkit',
+    'telegram_ai': 'telegram-ai', # Assuming this exists
+
+    # Web & API Integration (examples)
+    'telegram_api': 'telegram-api-client',
+    'telegram_web': 'telegram-web-integration',
+
+    # Gaming & Interactive (examples)
+    'telegram_games': 'telegram-games',
+    'telegram_quiz': 'telegram-quiz-bot',
+
+    # File & Media Handling (examples)
+    'telegram_ffmpeg': 'telegram-ffmpeg',
+    'telegram_media': 'telegram-media-utils',
+
+    # Security & Encryption (examples)
+    'telegram_2fa': 'telegram-twofa',
+    'telegram_crypto': 'telegram-crypto-bot',
+
+    # Localization & i18n (examples)
+    'telegram_i18n': 'telegram-i18n',
+    'telegram_translate': 'telegram-translate',
+
+    # Common non-telegram examples
+    'bs4': 'beautifulsoup4',
+    'requests': 'requests',
+    'pillow': 'Pillow', # Note the capitalization difference
+    'cv2': 'opencv-python', # Common import name for OpenCV
+    'yaml': 'PyYAML',
+    'dotenv': 'python-dotenv',
+    'dateutil': 'python-dateutil',
+    'pandas': 'pandas',
+    'numpy': 'numpy',
+    'flask': 'Flask',
+    'django': 'Django',
+    'sqlalchemy': 'SQLAlchemy',
+    'asyncio': None, # Core module, should not be installed
+    'json': None,    # Core module
+    'datetime': None,# Core module
+    'os': None,      # Core module
+    'sys': None,     # Core module
+    're': None,      # Core module
+    'time': None,    # Core module
+    'math': None,    # Core module
+    'random': None,  # Core module
+    'logging': None, # Core module
+    'threading': None,# Core module
+    'subprocess':None,# Core module
+    'zipfile':None,  # Core module
+    'tempfile':None, # Core module
+    'shutil':None,   # Core module
+    'sqlite3':None,  # Core module
+    'psutil': 'psutil',
+    'atexit': None   # Core module
+
+}
+# --- End Automatic Package Installation & Script Running ---
+
+
+# --- Database Operations ---
+DB_LOCK = threading.Lock() 
+
+def save_user_file(user_id, file_name, file_type='py'):
+    with DB_LOCK:
+        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
+        c = conn.cursor()
+        try:
+            c.execute('INSERT OR REPLACE INTO user_files (user_id, file_name, file_type) VALUES (?, ?, ?)',
+                      (user_id, file_name, file_type))
+            conn.commit()
+            if user_id not in user_files: user_files[user_id] = []
+            user_files[user_id] = [(fn, ft) for fn, ft in user_files[user_id] if fn != file_name]
+            user_files[user_id].append((file_name, file_type))
+            logger.info(f"Saved file '{file_name}' ({file_type}) for user {user_id}")
+        except sqlite3.Error as e: logger.error(f"❌ SQLite error saving file for user {user_id}, {file_name}: {e}")
+        except Exception as e: logger.error(f"❌ Unexpected error saving file for {user_id}, {file_name}: {e}", exc_info=True)
+        finally: conn.close()
+
+def remove_user_file_db(user_id, file_name):
+    with DB_LOCK:
+        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
+        c = conn.cursor()
+        try:
+            c.execute('DELETE FROM user_files WHERE user_id = ? AND file_name = ?', (user_id, file_name))
+            conn.commit()
+            if user_id in user_files:
+                user_files[user_id] = [f for f in user_files[user_id] if f[0] != file_name]
+                if not user_files[user_id]: del user_files[user_id]
+            logger.info(f"Removed file '{file_name}' for user {user_id} from DB")
+        except sqlite3.Error as e: logger.error(f"❌ SQLite error removing file for {user_id}, {file_name}: {e}")
+        except Exception as e: logger.error(f"❌ Unexpected error removing file for {user_id}, {file_name}: {e}", exc_info=True)
+        finally: conn.close()
+
+def add_active_user(user_id):
+    active_users.add(user_id) 
+    with DB_LOCK:
+        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
+        c = conn.cursor()
+        try:
+            c.execute('INSERT OR IGNORE INTO active_users (user_id) VALUES (?)', (user_id,))
+            conn.commit()
+            logger.info(f"Added/Confirmed active user {user_id} in DB")
+        except sqlite3.Error as e: logger.error(f"❌ SQLite error adding active user {user_id}: {e}")
+        except Exception as e: logger.error(f"❌ Unexpected error adding active user {user_id}: {e}", exc_info=True)
+        finally: conn.close()
+
+def save_subscription(user_id, expiry):
+    with DB_LOCK:
+        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
+        c = conn.cursor()
+        try:
+            expiry_str = expiry.isoformat()
+            c.execute('INSERT OR REPLACE INTO subscriptions (user_id, expiry) VALUES (?, ?)', (user_id, expiry_str))
+            conn.commit()
+            user_subscriptions[user_id] = {'expiry': expiry}
+            logger.info(f"Saved subscription for {user_id}, expiry {expiry_str}")
+        except sqlite3.Error as e: logger.error(f"❌ SQLite error saving subscription for {user_id}: {e}")
+        except Exception as e: logger.error(f"❌ Unexpected error saving subscription for {user_id}: {e}", exc_info=True)
+        finally: conn.close()
+
+def remove_subscription_db(user_id):
+    with DB_LOCK:
+        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
+        c = conn.cursor()
+        try:
+            c.execute('DELETE FROM subscriptions WHERE user_id = ?', (user_id,))
+            conn.commit()
+            if user_id in user_subscriptions: del user_subscriptions[user_id]
+            logger.info(f"Removed subscription for {user_id} from DB")
+        except sqlite3.Error as e: logger.error(f"❌ SQLite error removing subscription for {user_id}: {e}")
+        except Exception as e: logger.error(f"❌ Unexpected error removing subscription for {user_id}: {e}", exc_info=True)
+        finally: conn.close()
+
+def add_admin_db(admin_id):
+    with DB_LOCK:
+        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
+        c = conn.cursor()
+        try:
+            c.execute('INSERT OR IGNORE INTO admins (user_id) VALUES (?)', (admin_id,))
+            conn.commit()
+            admin_ids.add(admin_id) 
+            logger.info(f"Added admin {admin_id} to DB")
+        except sqlite3.Error as e: logger.error(f"❌ SQLite error adding admin {admin_id}: {e}")
+        except Exception as e: logger.error(f"❌ Unexpected error adding admin {admin_id}: {e}", exc_info=True)
+        finally: conn.close()
+
+def remove_admin_db(admin_id):
+    if admin_id == OWNER_ID:
+        logger.warning("Attempted to remove OWNER_ID from admins.")
+        return False 
+    with DB_LOCK:
+        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
+        c = conn.cursor()
+        removed = False
+        try:
+            c.execute('SELECT 1 FROM admins WHERE user_id = ?', (admin_id,))
+            if c.fetchone():
+                c.execute('DELETE FROM admins WHERE user_id = ?', (admin_id,))
+                conn.commit()
+                removed = c.rowcount > 0 
+                if removed: admin_ids.discard(admin_id); logger.info(f"Removed admin {admin_id} from DB")
+                else: logger.warning(f"Admin {admin_id} found but delete affected 0 rows.")
+            else:
+                logger.warning(f"Admin {admin_id} not found in DB.")
+                admin_ids.discard(admin_id)
+            return removed
+        except sqlite3.Error as e: logger.error(f"❌ SQLite error removing admin {admin_id}: {e}"); return False
+        except Exception as e: logger.error(f"❌ Unexpected error removing admin {admin_id}: {e}", exc_info=True); return False
+        finally: conn.close()
+# --- End Database Operations ---
+
+# --- Menu creation (Inline and ReplyKeyboards) ---
+def cancel_markup(callback_data="cancel_action"):
+    """Reusable English Cancel button for interactive menus and input prompts."""
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data=callback_data))
+    return markup
+
+def create_main_menu_inline(user_id):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(types.InlineKeyboardButton('📂 Check Files', callback_data='check_files'),
+               types.InlineKeyboardButton('🛒 Buy Package', callback_data='buy_package'))
+    markup.add(types.InlineKeyboardButton('⚡ Bot Speed', callback_data='speed'),
+               types.InlineKeyboardButton('📊 Statistics', callback_data='stats'))
+    markup.add(types.InlineKeyboardButton('📞 Contact Owner', url=f'https://t.me/{YOUR_USERNAME.replace("@", "")}'))
+    markup.add(types.InlineKeyboardButton('❌ Cancel', callback_data='cancel_action'))
+    if user_id in admin_ids:
+        markup.add(types.InlineKeyboardButton('👑 Admin Panel', callback_data='admin_panel'))
+    return markup
+
+def create_reply_keyboard_main_menu(user_id):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    layout_to_use = ADMIN_COMMAND_BUTTONS_LAYOUT_USER_SPEC if user_id in admin_ids else COMMAND_BUTTONS_LAYOUT_USER_SPEC
+    for row_buttons_text in layout_to_use:
+        markup.add(*[types.KeyboardButton(text) for text in row_buttons_text])
+    return markup
+
+def create_control_buttons(script_owner_id, file_name, is_running=True): # Parameter renamed
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    # Callbacks use script_owner_id
+    if is_running:
+        markup.row(
+            types.InlineKeyboardButton("🔴 Stop", callback_data=f'stop_{script_owner_id}_{file_name}'),
+            types.InlineKeyboardButton("🔄 Restart", callback_data=f'restart_{script_owner_id}_{file_name}')
+        )
+        markup.row(
+            types.InlineKeyboardButton("🗑️ Delete", callback_data=f'delete_{script_owner_id}_{file_name}'),
+            types.InlineKeyboardButton("📜 Logs", callback_data=f'logs_{script_owner_id}_{file_name}')
+        )
+    else:
+        markup.row(
+            types.InlineKeyboardButton("🟢 Start", callback_data=f'start_{script_owner_id}_{file_name}'),
+            types.InlineKeyboardButton("🗑️ Delete", callback_data=f'delete_{script_owner_id}_{file_name}')
+        )
+        markup.row(
+            types.InlineKeyboardButton("📜 View Logs", callback_data=f'logs_{script_owner_id}_{file_name}')
+        )
+    # Database and Env / Token buttons removed as requested.
+    markup.add(types.InlineKeyboardButton("🔙 Back to Files", callback_data='check_files'))
+    markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data='cancel_action'))
+    return markup
+
+def create_admin_panel():
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.row(
+        types.InlineKeyboardButton('➕ Add Admin', callback_data='add_admin'),
+        types.InlineKeyboardButton('➖ Remove Admin', callback_data='remove_admin')
+    )
+    markup.row(types.InlineKeyboardButton('📋 List Admins', callback_data='list_admins'))
+    markup.row(types.InlineKeyboardButton('❌ Cancel', callback_data='cancel_action'))
+    markup.row(types.InlineKeyboardButton('🔙 Back to Main', callback_data='back_to_main'))
+    return markup
+
+def create_subscription_menu():
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.row(
+        types.InlineKeyboardButton('➕ Add Subscription', callback_data='add_subscription'),
+        types.InlineKeyboardButton('➖ Remove Subscription', callback_data='remove_subscription')
+    )
+    markup.row(types.InlineKeyboardButton('🔍 Check Subscription', callback_data='check_subscription'))
+    markup.row(types.InlineKeyboardButton('❌ Cancel', callback_data='cancel_action'))
+    markup.row(types.InlineKeyboardButton('🔙 Back to Main', callback_data='back_to_main'))
+    return markup
+# --- End Menu Creation ---
+
+# --- File Handling ---
+def launch_or_prompt_env(file_path, owner_id, work_dir, bot_name, file_type, message):
+    """Start a hosted script without showing Env / Token controls."""
+    target = run_script if file_type == 'py' else run_js_script
+    threading.Thread(target=target, args=(file_path, owner_id, work_dir, bot_name, message)).start()
+
+def handle_zip_file(downloaded_file_content, file_name_zip, message):
+    user_id = message.from_user.id
+    temp_dir = None
+    try:
+        temp_dir = tempfile.mkdtemp(prefix=f"user_{user_id}_zip_")
+        logger.info(f"Temp dir for zip: {temp_dir}")
+        zip_path = os.path.join(temp_dir, 'upload.zip')
+        extract_dir = os.path.join(temp_dir, 'content'); os.makedirs(extract_dir)
+        with open(zip_path, 'wb') as new_file: new_file.write(downloaded_file_content)
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            infos = zip_ref.infolist()
+            if len(infos) > MAX_ZIP_FILES: raise zipfile.BadZipFile("Too many files in archive")
+            if sum(i.file_size for i in infos) > MAX_ZIP_UNCOMPRESSED: raise zipfile.BadZipFile("Archive too large when extracted")
+            base_abs = os.path.abspath(extract_dir)
+            for member in infos:
+                target = os.path.abspath(os.path.join(extract_dir, member.filename))
+                if os.path.commonpath([base_abs, target]) != base_abs:
+                    raise zipfile.BadZipFile(f"Zip has unsafe path: {member.filename}")
+                if ((member.external_attr >> 16) & 0o170000) == 0o120000:
+                    raise zipfile.BadZipFile(f"Symlinks are not allowed: {member.filename}")
+            zip_ref.extractall(extract_dir)
+            logger.info(f"Extracted zip to {extract_dir}")
+
+        extracted_items = os.listdir(extract_dir)
+        py_files = [f for f in extracted_items if f.endswith('.py')]
+        js_files = [f for f in extracted_items if f.endswith('.js')]
+        req_file = 'requirements.txt' if 'requirements.txt' in extracted_items else None
+        pkg_json = 'package.json' if 'package.json' in extracted_items else None
+
+        if req_file:
+            req_path = os.path.join(extract_dir, req_file)
+            logger.info(f"requirements.txt found, installing: {req_path}")
+            bot.reply_to(message, f"🔄 Installing Python deps from `{req_file}`...")
+            try:
+                command = [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '-r', req_path]
+                result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8', errors='ignore')
+                logger.info(f"pip install from requirements.txt OK. Output:\n{result.stdout}")
+                bot.reply_to(message, f"✅ Python deps from `{req_file}` installed.")
+            except subprocess.CalledProcessError as e:
+                error_msg = f"❌ Failed to install Python deps from `{req_file}`.\nLog:\n```\n{e.stderr or e.stdout}\n```"
+                logger.error(error_msg)
+                if len(error_msg) > 4000: error_msg = error_msg[:4000] + "\n... (Log truncated)"
+                bot.reply_to(message, error_msg, parse_mode='Markdown'); return
+            except Exception as e:
+                 error_msg = f"❌ Unexpected error installing Python deps: {e}"
+                 logger.error(error_msg, exc_info=True); bot.reply_to(message, error_msg); return
+
+        if pkg_json:
+            logger.info(f"package.json found, npm install in: {extract_dir}")
+            bot.reply_to(message, f"🔄 Installing Node deps from `{pkg_json}`...")
+            try:
+                command = ['npm', 'install']
+                result = subprocess.run(command, capture_output=True, text=True, check=True, cwd=extract_dir, encoding='utf-8', errors='ignore')
+                logger.info(f"npm install OK. Output:\n{result.stdout}")
+                bot.reply_to(message, f"✅ Node deps from `{pkg_json}` installed.")
+            except FileNotFoundError:
+                bot.reply_to(message, "❌ 'npm' not found. Cannot install Node deps."); return
+            except subprocess.CalledProcessError as e:
+                error_msg = f"❌ Failed to install Node deps from `{pkg_json}`.\nLog:\n```\n{e.stderr or e.stdout}\n```"
+                logger.error(error_msg)
+                if len(error_msg) > 4000: error_msg = error_msg[:4000] + "\n... (Log truncated)"
+                bot.reply_to(message, error_msg, parse_mode='Markdown'); return
+            except Exception as e:
+                 error_msg = f"❌ Unexpected error installing Node deps: {e}"
+                 logger.error(error_msg, exc_info=True); bot.reply_to(message, error_msg); return
+
+        main_script_name = None; file_type = None
+        preferred_py = ['main.py', 'bot.py', 'app.py']; preferred_js = ['index.js', 'main.js', 'bot.js', 'app.js']
+        for p in preferred_py:
+            if p in py_files: main_script_name = p; file_type = 'py'; break
+        if not main_script_name:
+             for p in preferred_js:
+                 if p in js_files: main_script_name = p; file_type = 'js'; break
+        if not main_script_name:
+            if py_files: main_script_name = py_files[0]; file_type = 'py'
+            elif js_files: main_script_name = js_files[0]; file_type = 'js'
+        if not main_script_name:
+            bot.reply_to(message, "❌ No `.py` or `.js` script found in archive!"); return
+
+        # Every upload gets its OWN folder (=> its own database, .env, logs). Same name => separate instance.
+        bot_name = unique_bot_name(user_id, sanitize_file_name(main_script_name))
+        work_dir = get_instance_dir(user_id, bot_name, create=True)
+        logger.info(f"Moving extracted files from {extract_dir} to {work_dir}")
+        for item_name in os.listdir(extract_dir):
+            shutil.move(os.path.join(extract_dir, item_name), os.path.join(work_dir, item_name))
+        if bot_name != main_script_name:
+            os.replace(os.path.join(work_dir, main_script_name), os.path.join(work_dir, bot_name))
+            bot.reply_to(message, f"ℹ️ Hosted as separate instance `{bot_name}` (own folder & database).", parse_mode='Markdown')
+
+        save_user_file(user_id, bot_name, file_type)
+        logger.info(f"Saved main script '{bot_name}' ({file_type}) for {user_id} from zip.")
+        main_script_path = os.path.join(work_dir, bot_name)
+        bot.reply_to(message, f"✅ Files extracted. Main script: `{bot_name}`", parse_mode='Markdown')
+        launch_or_prompt_env(main_script_path, user_id, work_dir, bot_name, file_type, message)
+
+    except zipfile.BadZipFile as e:
+        logger.error(f"Bad zip file from {user_id}: {e}")
+        bot.reply_to(message, f"❌ Error: Invalid/corrupted ZIP. {e}")
+    except Exception as e:
+        logger.error(f"❌ Error processing zip for {user_id}: {e}", exc_info=True)
+        bot.reply_to(message, f"❌ Error processing zip: {str(e)}")
+    finally:
+        if temp_dir and os.path.exists(temp_dir):
+            try: shutil.rmtree(temp_dir); logger.info(f"Cleaned temp dir: {temp_dir}")
+            except Exception as e: logger.error(f"Failed to clean temp dir {temp_dir}: {e}", exc_info=True)
+
+def handle_js_file(file_path, script_owner_id, user_folder, file_name, message):
+    try:
+        save_user_file(script_owner_id, file_name, 'js')
+        launch_or_prompt_env(file_path, script_owner_id, user_folder, file_name, 'js', message)
+    except Exception as e:
+        logger.error(f"❌ Error processing JS file {file_name} for {script_owner_id}: {e}", exc_info=True)
+        bot.reply_to(message, f"❌ Error processing JS file: {str(e)}")
+
+def handle_py_file(file_path, script_owner_id, user_folder, file_name, message):
+    try:
+        save_user_file(script_owner_id, file_name, 'py')
+        launch_or_prompt_env(file_path, script_owner_id, user_folder, file_name, 'py', message)
+    except Exception as e:
+        logger.error(f"❌ Error processing Python file {file_name} for {script_owner_id}: {e}", exc_info=True)
+        bot.reply_to(message, f"❌ Error processing Python file: {str(e)}")
+# --- End File Handling ---
+
+
+# --- Logic Functions (called by commands and text handlers) ---
+def _logic_send_welcome(message):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    user_name = message.from_user.first_name
+    user_username = message.from_user.username
+
+    logger.info(f"Welcome request from user_id: {user_id}, username: @{user_username}")
+    try:
+        with sqlite3.connect(DATABASE_PATH) as conn:
+            conn.execute("INSERT OR REPLACE INTO user_profiles(user_id,username,first_name,last_seen) VALUES(?,?,?,?)",
+                         (user_id, user_username or '', user_name or 'User', datetime.now().isoformat()))
+    except Exception as profile_error:
+        logger.warning("Could not save user profile: %s", profile_error)
+
+    if bot_locked and user_id not in admin_ids:
+        bot.send_message(chat_id, "⚠️ Bot locked by admin. Try later.")
+        return
+
+    user_bio = "Could not fetch bio"; photo_file_id = None
+    try: user_bio = bot.get_chat(user_id).bio or "No bio"
+    except Exception: pass
+    try:
+        user_profile_photos = bot.get_user_profile_photos(user_id, limit=1)
+        if user_profile_photos.photos: photo_file_id = user_profile_photos.photos[0][-1].file_id
+    except Exception: pass
+
+    if user_id not in active_users:
+        add_active_user(user_id)
+        try:
+            owner_notification = (f"🎉 New user!\n👤 Name: {user_name}\n✳️ User: @{user_username or 'N/A'}\n"
+                                  f"🆔 ID: `{user_id}`\n📝 Bio: {user_bio}")
+            bot.send_message(OWNER_ID, owner_notification, parse_mode='Markdown')
+            if photo_file_id: bot.send_photo(OWNER_ID, photo_file_id, caption=f"Pic of new user {user_id}")
+        except Exception as e: logger.error(f"⚠️ Failed to notify owner about new user {user_id}: {e}")
+
+    file_limit = get_user_file_limit(user_id)
+    current_files = get_user_file_count(user_id)
+    limit_str = str(file_limit) if file_limit != float('inf') else "Unlimited"
+    expiry_info = ""
+    paid_package = active_package_for_user(user_id) if user_id not in admin_ids else None
+    if user_id == OWNER_ID: user_status = "👑 Owner"
+    elif user_id in admin_ids: user_status = "🛡️ Admin"
+    elif paid_package:
+        user_status = f"⭐ Premium — {paid_package['name']}"
+        try:
+            days_left = max(0, (datetime.fromisoformat(paid_package['expiry']) - datetime.now()).days)
+            expiry_info = f"\n⏳ প্যাকেজের মেয়াদ বাকি: {days_left} দিন"
+        except Exception: pass
+    else:
+        user_status = "🆓 No Package"
+
+    safe_name = html.escape(str(user_name or 'User'))
+    safe_username = html.escape('@' + user_username if user_username else 'Not set')
+    access_note = ("✅ আপনার প্যাকেজ সক্রিয়। নিচের 📤 Upload File বাটনে ফাইল দিন।" if (user_id in admin_ids or paid_package)
+                   else "🔒 ফাইল আপলোড করতে আগে 🛒 Buy Package থেকে প্যাকেজ কিনুন। পেমেন্ট Admin approve করলে Upload File চালু হবে।")
+    welcome_msg_text = (f"〽️ <b>Welcome, {safe_name}!</b>\n\n"
+                        f"🆔 <b>Your User ID:</b> <code>{user_id}</code>\n"
+                        f"✳️ <b>Username:</b> <code>{safe_username}</code>\n"
+                        f"🔰 <b>Status:</b> {html.escape(user_status)}{html.escape(expiry_info)}\n"
+                        f"📁 <b>Files Uploaded:</b> {current_files} / {html.escape(limit_str)}\n\n"
+                        f"🤖 Python (.py) এবং JavaScript (.js) স্ক্রিপ্ট হোস্ট করুন।\n"
+                        f"🗂️ একক ফাইল অথবা .zip archive আপলোড করা যাবে।\n\n"
+                        f"{html.escape(access_note)}\n\n"
+                        f"👇 <b>নিচের বাটন ব্যবহার করুন।</b>")
+    main_reply_markup = create_reply_keyboard_main_menu(user_id)
+    try:
+        if photo_file_id: bot.send_photo(chat_id, photo_file_id)
+        bot.send_message(chat_id, welcome_msg_text, reply_markup=main_reply_markup, parse_mode='HTML')
+    except Exception as e:
+        logger.error(f"Error sending welcome to {user_id}: {e}", exc_info=True)
+        try: bot.send_message(chat_id, welcome_msg_text, reply_markup=main_reply_markup, parse_mode='HTML')
+        except Exception as fallback_e: logger.error(f"Fallback send_message failed for {user_id}: {fallback_e}")
+
+def _logic_updates_channel(message):
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton('📢 Updates Channel', url=UPDATE_CHANNEL))
+    markup.add(types.InlineKeyboardButton('❌ Cancel', callback_data='cancel_action'))
+    bot.reply_to(message, "Visit our Updates Channel:", reply_markup=markup)
+
+def _user_package_access_revoked(user_id):
+    try:
+        with sqlite3.connect(DATABASE_PATH) as conn:
+            return conn.execute("SELECT 1 FROM package_access_revoked WHERE user_id=?", (user_id,)).fetchone() is not None
+    except Exception as exc:
+        logger.error(f"Could not verify package revocation for {user_id}: {exc}")
+        # Fail closed: a DB problem must not accidentally grant upload access.
+        return True
+
+def _user_can_upload(user_id):
+    """Only admins/owner or users with an active, approved, non-revoked package can upload."""
+    if user_id in admin_ids:
+        return True
+    if _user_package_access_revoked(user_id):
+        return False
+    try:
+        return active_package_for_user(user_id) is not None
+    except Exception:
+        return False
+
+def _upload_package_required(message):
+    bot.reply_to(message, "🔒 ফাইল আপলোড করতে আগে 🛒 Buy Package থেকে প্যাকেজ কিনুন। পেমেন্ট Admin approve করার পর 📤 Upload File চালু হবে।")
+
+def _logic_upload_file(message):
+    user_id = message.from_user.id
+    if not _user_can_upload(user_id):
+        _upload_package_required(message)
+        return
+    if bot_locked and user_id not in admin_ids:
+        bot.reply_to(message, "⚠️ Bot locked by admin, cannot accept files.")
+        return
+
+    file_limit = get_user_file_limit(user_id)
+    current_files = get_user_file_count(user_id)
+    if current_files >= file_limit:
+        limit_str = str(file_limit) if file_limit != float('inf') else "Unlimited"
+        bot.reply_to(message, f"⚠️ File limit ({current_files}/{limit_str}) reached. Delete files first.")
+        return
+    bot.reply_to(message, "📤 Send your Python (`.py`), JS (`.js`), or ZIP (`.zip`) file.", reply_markup=cancel_markup())
+
+def _logic_check_files(message):
+    user_id = message.from_user.id
+    # chat_id = message.chat.id # user_id will be used as script_owner_id for buttons
+    user_files_list = user_files.get(user_id, [])
+    if not user_files_list:
+        bot.reply_to(message, "📂 Your files:\n\n(No files uploaded yet)", reply_markup=cancel_markup())
+        return
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for file_name, file_type in sorted(user_files_list):
+        is_running = is_bot_running(user_id, file_name) # Use user_id for checking status
+        status_icon = "🟢 Running" if is_running else "🔴 Stopped"
+        btn_text = f"{file_name} ({file_type}) - {status_icon}"
+        # Callback data includes user_id as script_owner_id
+        markup.add(types.InlineKeyboardButton(btn_text, callback_data=f'file_{user_id}_{file_name}'))
+    markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_action"))
+    markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_action"))
+    markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_action"))
+    bot.reply_to(message, "📂 Your files:\nClick to manage.", reply_markup=markup, parse_mode='Markdown')
+
+def _logic_bot_speed(message):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    start_time_ping = time.time()
+    wait_msg = bot.reply_to(message, "🏃 Testing speed...")
+    try:
+        bot.send_chat_action(chat_id, 'typing')
+        response_time = round((time.time() - start_time_ping) * 1000, 2)
+        status = "🔓 Unlocked" if not bot_locked else "🔒 Locked"
+        # mode = "💰 Free Mode: ON" if free_mode else "💸 Free Mode: OFF" # Removed free_mode
+        if user_id == OWNER_ID: user_level = "👑 Owner"
+        elif user_id in admin_ids: user_level = "🛡️ Admin"
+        elif user_id in user_subscriptions and user_subscriptions[user_id].get('expiry', datetime.min) > datetime.now(): user_level = "⭐ Premium"
+        else: user_level = "🆓 Free User"
+        speed_msg = (f"⚡ Bot Speed & Status:\n\n⏱️ API Response Time: {response_time} ms\n"
+                     f"🚦 Bot Status: {status}\n"
+                     # f"模式 Mode: {mode}\n" # Removed
+                     f"👤 Your Level: {active_package_for_user(user_id)['name'] if active_package_for_user(user_id) else ('🆓 No package' if user_level == '🆓 Free User' else user_level)}")
+        bot.edit_message_text(speed_msg, chat_id, wait_msg.message_id)
+    except Exception as e:
+        logger.error(f"Error during speed test (cmd): {e}", exc_info=True)
+        bot.edit_message_text("❌ Error during speed test.", chat_id, wait_msg.message_id)
+
+def _logic_contact_owner(message):
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton('📞 Contact Owner', url=f'https://t.me/{YOUR_USERNAME.replace("@", "")}'))
+    markup.add(types.InlineKeyboardButton('❌ Cancel', callback_data='cancel_action'))
+    bot.reply_to(message, "Click to contact Owner:", reply_markup=markup)
+
+# --- Admin Logic Functions ---
+def _logic_subscriptions_panel(message):
+    if message.from_user.id not in admin_ids:
+        bot.reply_to(message, "⚠️ Admin permissions required.")
+        return
+    bot.reply_to(message, "💳 Subscription Management\nUse inline buttons from /start or admin command menu.", reply_markup=create_subscription_menu())
+
+def _logic_statistics(message):
+    user_id = message.from_user.id
+    files = user_files.get(user_id, [])
+    running = sum(1 for name, _ in files if is_bot_running(user_id, name))
+    limit = get_user_file_limit(user_id)
+    package = active_package_for_user(user_id)
+    level = package["name"] if package else ("⭐ Legacy Premium" if user_id in user_subscriptions and user_subscriptions[user_id].get('expiry', datetime.min) > datetime.now() else "🆓 No package")
+    text = (f"📊 My Status\n\n🔰 {level}\n\n"
+            f"🤖 Bots: {len(files)} / {limit if limit != float('inf') else '∞'}   🟢 On: {running}   🔴 Off: {max(0, len(files)-running)}\n")
+    if not files: text += "(No bots hosted yet)"
+    bot.reply_to(message, text)
+
+
+def _logic_broadcast_init(message):
+    if message.from_user.id not in admin_ids:
+        bot.reply_to(message, "⚠️ Admin permissions required.")
+        return
+    msg = bot.reply_to(message, "📢 Send message to broadcast to all active users.\n/cancel to abort.")
+    bot.register_next_step_handler(msg, process_broadcast_message)
+
+def _logic_toggle_lock_bot(message):
+    if message.from_user.id not in admin_ids:
+        bot.reply_to(message, "⚠️ Admin permissions required.")
+        return
+    global bot_locked
+    bot_locked = not bot_locked
+    status = "locked" if bot_locked else "unlocked"
+    logger.warning(f"Bot {status} by Admin {message.from_user.id} via command/button.")
+    bot.reply_to(message, f"🔒 Bot has been {status}.")
+
+# def _logic_toggle_free_mode(message): # Removed
+#     pass
+
+def _logic_admin_panel(message):
+    if message.from_user.id not in admin_ids:
+        bot.reply_to(message, "⚠️ Admin permissions required.")
+        return
+    bot.reply_to(message, "👑 Admin Panel\nManage admins. Use inline buttons from /start or admin menu.",
+                 reply_markup=create_admin_panel())
+
+def _logic_run_all_scripts(message_or_call):
+    if isinstance(message_or_call, telebot.types.Message):
+        admin_user_id = message_or_call.from_user.id
+        admin_chat_id = message_or_call.chat.id
+        reply_func = lambda text, **kwargs: bot.reply_to(message_or_call, text, **kwargs)
+        admin_message_obj_for_script_runner = message_or_call
+    elif isinstance(message_or_call, telebot.types.CallbackQuery):
+        admin_user_id = message_or_call.from_user.id
+        admin_chat_id = message_or_call.message.chat.id
+        bot.answer_callback_query(message_or_call.id)
+        reply_func = lambda text, **kwargs: bot.send_message(admin_chat_id, text, **kwargs)
+        admin_message_obj_for_script_runner = message_or_call.message 
+    else:
+        logger.error("Invalid argument for _logic_run_all_scripts")
+        return
+
+    if admin_user_id not in admin_ids:
+        reply_func("⚠️ Admin permissions required.")
+        return
+
+    reply_func("⏳ Starting process to run all user scripts. This may take a while...")
+    logger.info(f"Admin {admin_user_id} initiated 'run all scripts' from chat {admin_chat_id}.")
+
+    started_count = 0; attempted_users = 0; skipped_files = 0; error_files_details = []
+
+    # Use a copy of user_files keys and values to avoid modification issues during iteration
+    all_user_files_snapshot = dict(user_files)
+
+    for target_user_id, files_for_user in all_user_files_snapshot.items():
+        if not files_for_user: continue
+        attempted_users += 1
+        logger.info(f"Processing scripts for user {target_user_id}...")
+        user_folder = get_user_folder(target_user_id)
+
+        for file_name, file_type in files_for_user:
+            # script_owner_id for key context is target_user_id
+            if not is_bot_running(target_user_id, file_name):
+                user_folder, file_path = resolve_bot_paths(target_user_id, file_name)
+                if os.path.exists(file_path):
+                    logger.info(f"Admin {admin_user_id} attempting to start '{file_name}' ({file_type}) for user {target_user_id}.")
+                    try:
+                        if file_type == 'py':
+                            threading.Thread(target=run_script, args=(file_path, target_user_id, user_folder, file_name, admin_message_obj_for_script_runner)).start()
+                            started_count += 1
+                        elif file_type == 'js':
+                            threading.Thread(target=run_js_script, args=(file_path, target_user_id, user_folder, file_name, admin_message_obj_for_script_runner)).start()
+                            started_count += 1
+                        else:
+                            logger.warning(f"Unknown file type '{file_type}' for {file_name} (user {target_user_id}). Skipping.")
+                            error_files_details.append(f"`{file_name}` (User {target_user_id}) - Unknown type")
+                            skipped_files += 1
+                        time.sleep(0.7) # Increased delay slightly
+                    except Exception as e:
+                        logger.error(f"Error queueing start for '{file_name}' (user {target_user_id}): {e}")
+                        error_files_details.append(f"`{file_name}` (User {target_user_id}) - Start error")
+                        skipped_files += 1
+                else:
+                    logger.warning(f"File '{file_name}' for user {target_user_id} not found at '{file_path}'. Skipping.")
+                    error_files_details.append(f"`{file_name}` (User {target_user_id}) - File not found")
+                    skipped_files += 1
+            # else: logger.info(f"Script '{file_name}' for user {target_user_id} already running.")
+
+    summary_msg = (f"✅ All Users' Scripts - Processing Complete:\n\n"
+                   f"▶️ Attempted to start: {started_count} scripts.\n"
+                   f"👥 Users processed: {attempted_users}.\n")
+    if skipped_files > 0:
+        summary_msg += f"⚠️ Skipped/Error files: {skipped_files}\n"
+        if error_files_details:
+             summary_msg += "Details (first 5):\n" + "\n".join([f"  - {err}" for err in error_files_details[:5]])
+             if len(error_files_details) > 5: summary_msg += "\n  ... and more (check logs)."
+
+    reply_func(summary_msg, parse_mode='Markdown')
+    logger.info(f"Run all scripts finished. Admin: {admin_user_id}. Started: {started_count}. Skipped/Errors: {skipped_files}")
+
+
+# --- Command Handlers & Text Handlers for ReplyKeyboard ---
+@bot.message_handler(commands=['start', 'help'])
+def command_send_welcome(message): _logic_send_welcome(message)
+
+@bot.message_handler(commands=['status']) # Kept for direct command
+def command_show_status(message): _logic_statistics(message) # Changed to call _logic_statistics
+
+
+BUTTON_TEXT_TO_LOGIC = {
+    "📤 Upload File": _logic_upload_file,
+    "🛒 Buy Package": lambda message: show_packages(message.chat.id),
+    "⚡ Bot Speed": _logic_bot_speed,
+    "📂 Check Files": _logic_check_files,
+    "📜 Package History": lambda message: show_package_history(message.chat.id),
+    "📊 Statistics": _logic_statistics,
+    "📞 Contact Owner": _logic_contact_owner,
+    "📢 Updates Channel": _logic_updates_channel,
+    "💳 Subscriptions": _logic_subscriptions_panel,
+    "📢 Broadcast": _logic_broadcast_init,
+    "🔒 Lock Bot": _logic_toggle_lock_bot,
+    # "💰 Free Mode": _logic_toggle_free_mode, # Removed
+    "🟢 Running All Code": _logic_run_all_scripts,  # Added
+    "👑 Admin Panel": _logic_admin_panel,
+}
+
+@bot.message_handler(func=lambda message: message.text in BUTTON_TEXT_TO_LOGIC)
+def handle_button_text(message):
+    logic_func = BUTTON_TEXT_TO_LOGIC.get(message.text)
+    if logic_func: logic_func(message)
+    else: logger.warning(f"Button text '{message.text}' matched but no logic func.")
+
+@bot.message_handler(commands=['updateschannel'])
+def command_updates_channel(message): _logic_updates_channel(message)
+@bot.message_handler(commands=['uploadfile'])
+def command_upload_file(message): _logic_upload_file(message)
+@bot.message_handler(commands=['checkfiles'])
+def command_check_files(message): _logic_check_files(message)
+@bot.message_handler(commands=['botspeed'])
+def command_bot_speed(message): _logic_bot_speed(message)
+@bot.message_handler(commands=['contactowner'])
+def command_contact_owner(message): _logic_contact_owner(message)
+@bot.message_handler(commands=['subscriptions'])
+def command_subscriptions(message): _logic_subscriptions_panel(message)
+@bot.message_handler(commands=['statistics']) # Alias for /status
+def command_statistics(message): _logic_statistics(message)
+@bot.message_handler(commands=['broadcast'])
+def command_broadcast(message): _logic_broadcast_init(message)
+@bot.message_handler(commands=['lockbot']) 
+def command_lock_bot(message): _logic_toggle_lock_bot(message)
+# @bot.message_handler(commands=['freemode']) # Removed
+# def command_free_mode(message): _logic_toggle_free_mode(message)
+@bot.message_handler(commands=['adminpanel'])
+def command_admin_panel(message): _logic_admin_panel(message)
+@bot.message_handler(commands=['runningallcode']) # Added
+def command_run_all_code(message): _logic_run_all_scripts(message)
+
+
+@bot.message_handler(commands=['ping'])
+def ping(message):
+    start_ping_time = time.time() 
+    msg = bot.reply_to(message, "Pong!")
+    latency = round((time.time() - start_ping_time) * 1000, 2)
+    bot.edit_message_text(f"Pong! Latency: {latency} ms", message.chat.id, msg.message_id)
+
+
+# --- Document (File) Handler ---
+@bot.message_handler(content_types=['document'])
+def handle_file_upload_doc(message): # Renamed
+    user_id = message.from_user.id
+    chat_id = message.chat.id # Used for replies, script context uses user_id
+    doc = message.document
+    logger.info(f"Doc from {user_id}: {doc.file_name} ({doc.mime_type}), Size: {doc.file_size}")
+
+    if bot_locked and user_id not in admin_ids:
+        bot.reply_to(message, "⚠️ Bot locked, cannot accept files.")
+        return
+
+    # Strict package gate: users cannot upload files before an approved active package.
+    if not _user_can_upload(user_id):
+        _upload_package_required(message)
+        return
+
+    file_limit = get_user_file_limit(user_id)
+    current_files = get_user_file_count(user_id)
+    if current_files >= file_limit:
+        limit_str = str(file_limit) if file_limit != float('inf') else "Unlimited"
+        bot.reply_to(message, f"⚠️ File limit ({current_files}/{limit_str}) reached. Delete files via /checkfiles.")
+        return
+
+    raw_name = doc.file_name
+    if not raw_name: bot.reply_to(message, "⚠️ No file name. Ensure file has a name."); return
+    if raw_name.lower() == '.env' or raw_name.lower().endswith('.env'):
+        bot.reply_to(message, "⚠️ .env upload is not available from this bot menu. Configure required variables in your hosting settings.")
+        return
+    file_name = sanitize_file_name(raw_name)
+    file_ext = os.path.splitext(file_name)[1].lower()
+    now_ts = time.time()
+    if user_id not in admin_ids and now_ts - _last_upload.get(user_id, 0) < UPLOAD_COOLDOWN:
+        bot.reply_to(message, "⏳ Slow down - wait a few seconds between uploads."); return
+    _last_upload[user_id] = now_ts
+    if file_ext not in ['.py', '.js', '.zip']:
+        bot.reply_to(message, "⚠️ Unsupported type! Only `.py`, `.js`, `.zip` allowed.")
+        return
+    max_file_size = 20 * 1024 * 1024 # 20 MB
+    if doc.file_size > max_file_size:
+        bot.reply_to(message, f"⚠️ File too large (Max: {max_file_size // 1024 // 1024} MB)."); return
+
+    try:
+        try:
+            bot.forward_message(OWNER_ID, chat_id, message.message_id)
+            bot.send_message(OWNER_ID, f"⬆️ File '{file_name}' from {message.from_user.first_name} (`{user_id}`)", parse_mode='Markdown')
+        except Exception as e: logger.error(f"Failed to forward uploaded file to OWNER_ID {OWNER_ID}: {e}")
+
+        download_wait_msg = bot.reply_to(message, f"⏳ Downloading `{file_name}`...")
+        file_info_tg_doc = bot.get_file(doc.file_id) # Renamed
+        downloaded_file_content = bot.download_file(file_info_tg_doc.file_path)
+        bot.edit_message_text(f"✅ Downloaded `{file_name}`. Processing...", chat_id, download_wait_msg.message_id)
+        logger.info(f"Downloaded {file_name} for user {user_id}")
+        if file_ext == '.zip':
+            handle_zip_file(downloaded_file_content, file_name, message)
         else:
-            num_ep = (p.get("extra_endpoints") or {}).get("get_number") or (p.get("number_endpoint") or "").strip()
-            if not num_ep:
-                return {"ok": False, "message": f"{p['name']} does not have a number allocation endpoint configured."}
-            r = requests.post(
-                f"{p['base_url']}{num_ep}",
-                headers=upstream_headers(api_token, p["key"]),
-                json={"range": str(raw_range or clean_rid).strip()},
-                timeout=12,
+            # Own private folder per hosted bot => own database / .env / logs
+            bot_name = unique_bot_name(user_id, file_name)
+            work_dir = get_instance_dir(user_id, bot_name, create=True)
+            file_path = os.path.join(work_dir, bot_name)
+            with open(file_path, 'wb') as f: f.write(downloaded_file_content)
+            logger.info(f"Saved single file to {file_path}")
+            if bot_name != file_name:
+                bot.reply_to(message, f"ℹ️ `{file_name}` already exists - hosting this one as a separate instance `{bot_name}` (own folder & database).", parse_mode='Markdown')
+            if file_ext == '.js': handle_js_file(file_path, user_id, work_dir, bot_name, message)
+            elif file_ext == '.py': handle_py_file(file_path, user_id, work_dir, bot_name, message)
+    except telebot.apihelper.ApiTelegramException as e:
+         logger.error(f"Telegram API Error handling file for {user_id}: {e}", exc_info=True)
+         if "file is too big" in str(e).lower():
+              bot.reply_to(message, f"❌ Telegram API Error: File too large to download (~20MB limit).")
+         else: bot.reply_to(message, f"❌ Telegram API Error: {str(e)}. Try later.")
+    except Exception as e:
+        logger.error(f"❌ General error handling file for {user_id}: {e}", exc_info=True)
+        bot.reply_to(message, f"❌ Unexpected error: {str(e)}")
+# --- End Document Handler ---
+
+
+# --- Callback Query Handlers (for Inline Buttons) ---
+def handle_generic_cancel(call):
+    """Cancel the current next-step input (when present) and close the prompt."""
+    try:
+        bot.clear_step_handler_by_chat_id(call.message.chat.id)
+    except Exception as exc:
+        logger.debug(f"No pending step handler to clear: {exc}")
+    bot.answer_callback_query(call.id, "Cancelled")
+    try:
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+    except Exception:
+        pass
+    try:
+        bot.send_message(call.message.chat.id, "❌ Cancelled.")
+    except Exception:
+        pass
+
+# --- Callback Query Handlers (for Inline Buttons) ---
+@bot.callback_query_handler(func=lambda call: True) 
+def handle_callbacks(call):
+    user_id = call.from_user.id
+    data = call.data
+    logger.info(f"Callback: User={user_id}, Data='{data}'")
+
+    if bot_locked and user_id not in admin_ids and data not in ['back_to_main', 'speed', 'stats', 'cancel_action']: # Allow stats
+        bot.answer_callback_query(call.id, "⚠️ Bot locked by admin.", show_alert=True)
+        return
+    try:
+        if data == 'upload': upload_callback(call)
+        elif data == 'check_files': check_files_callback(call)
+        elif data.startswith('file_'): file_control_callback(call)
+        elif data.startswith('start_'): start_bot_callback(call)
+        elif data.startswith('stop_'): stop_bot_callback(call)
+        elif data.startswith('restart_'): restart_bot_callback(call)
+        elif data.startswith('delete_'): delete_bot_callback(call)
+        elif data.startswith('logs_'): logs_bot_callback(call)
+        elif data.startswith('confirmdel_'): confirm_delete_callback(call)
+        elif data == 'speed': speed_callback(call)
+        elif data == 'buy_package': show_packages_callback(call)
+        elif data.startswith('pkg_'): package_selected_callback(call)
+        elif data.startswith('paymethod_'): payment_method_selected_callback(call)
+        elif data.startswith('payapprove_'): admin_payment_decision(call, True)
+        elif data.startswith('paycancel_'): admin_payment_decision(call, False)
+        elif data == 'payments_admin': admin_required_callback(call, show_pending_payments)
+        elif data == 'packages_admin': admin_required_callback(call, admin_packages_menu)
+        elif data == 'package_add': admin_required_callback(call, begin_add_package)
+        elif data == 'methods_admin': admin_required_callback(call, payment_methods_admin_menu)
+        elif data == 'payment_add_method': admin_required_callback(call, begin_add_payment_method)
+        elif data == 'payment_set_number': admin_required_callback(call, begin_set_payment_number)
+        elif data == 'payment_delete_method': admin_required_callback(call, begin_delete_payment_method)
+        elif data.startswith('pmset_'): admin_required_callback(call, select_payment_number_method)
+        elif data.startswith('pmdel_'): admin_required_callback(call, delete_payment_method_callback)
+        elif data == 'users_admin': admin_required_callback(call, show_hosted_users)
+        elif data.startswith('adminuser_'): admin_required_callback(call, show_user_bots_callback)
+        elif data.startswith('pkgdel_'): admin_required_callback(call, delete_package_callback)
+        elif data == 'back_to_main': back_to_main_callback(call)
+        elif data.startswith('confirm_broadcast_'): handle_confirm_broadcast(call)
+        elif data == 'cancel_broadcast': handle_cancel_broadcast(call)
+        elif data == 'cancel_action': handle_generic_cancel(call)
+        elif data == 'adminpkg_delete_user': admin_required_callback(call, begin_delete_user_package)
+        elif data.startswith('userpkgdel_'): admin_required_callback(call, confirm_delete_user_package)
+        elif data.startswith('userpkgconfirm_'): admin_required_callback(call, execute_delete_user_package)
+        # --- Admin Callbacks ---
+        elif data == 'subscription': admin_required_callback(call, subscription_management_callback)
+        elif data == 'stats': stats_callback(call) # No admin check here, handled in func
+        elif data == 'lock_bot': admin_required_callback(call, lock_bot_callback)
+        elif data == 'unlock_bot': admin_required_callback(call, unlock_bot_callback)
+        # elif data == 'free_mode': admin_required_callback(call, toggle_free_mode_callback) # Removed
+        elif data == 'run_all_scripts': admin_required_callback(call, run_all_scripts_callback) # Added
+        elif data == 'broadcast': admin_required_callback(call, broadcast_init_callback) 
+        elif data == 'admin_panel': admin_required_callback(call, admin_panel_callback)
+        elif data == 'add_admin': owner_required_callback(call, add_admin_init_callback) 
+        elif data == 'remove_admin': owner_required_callback(call, remove_admin_init_callback) 
+        elif data == 'list_admins': admin_required_callback(call, list_admins_callback)
+        elif data == 'add_subscription': admin_required_callback(call, add_subscription_init_callback) 
+        elif data == 'remove_subscription': admin_required_callback(call, remove_subscription_init_callback) 
+        elif data == 'check_subscription': admin_required_callback(call, check_subscription_init_callback) 
+        else:
+            bot.answer_callback_query(call.id, "Unknown action.")
+            logger.warning(f"Unhandled callback data: {data} from user {user_id}")
+    except Exception as e:
+        logger.error(f"Error handling callback '{data}' for {user_id}: {e}", exc_info=True)
+        try: bot.answer_callback_query(call.id, "Error processing request.", show_alert=True)
+        except Exception as e_ans: logger.error(f"Failed to answer callback after error: {e_ans}")
+
+def admin_required_callback(call, func_to_run):
+    if call.from_user.id not in admin_ids:
+        bot.answer_callback_query(call.id, "⚠️ Admin permissions required.", show_alert=True)
+        return
+    func_to_run(call) 
+
+def owner_required_callback(call, func_to_run):
+    if call.from_user.id != OWNER_ID:
+        bot.answer_callback_query(call.id, "⚠️ Owner permissions required.", show_alert=True)
+        return
+    func_to_run(call)
+
+def upload_callback(call):
+    user_id = call.from_user.id
+    if not _user_can_upload(user_id):
+        bot.answer_callback_query(call.id, "আগে প্যাকেজ কিনে Admin approval নিন।", show_alert=True)
+        return
+    file_limit = get_user_file_limit(user_id)
+    current_files = get_user_file_count(user_id)
+    if current_files >= file_limit:
+        limit_str = str(file_limit) if file_limit != float('inf') else "Unlimited"
+        bot.answer_callback_query(call.id, f"⚠️ File limit ({current_files}/{limit_str}) reached.", show_alert=True)
+        return
+    bot.answer_callback_query(call.id) 
+    bot.send_message(call.message.chat.id, "📤 Send your Python (`.py`), JS (`.js`), or ZIP (`.zip`) file.")
+
+def check_files_callback(call):
+    user_id = call.from_user.id
+    chat_id = call.message.chat.id 
+    user_files_list = user_files.get(user_id, [])
+    if not user_files_list:
+        bot.answer_callback_query(call.id, "⚠️ No files uploaded.", show_alert=True)
+        try:
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("🔙 Back to Main", callback_data='back_to_main'))
+            markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data='cancel_action'))
+            bot.edit_message_text("📂 Your files:\n\n(No files uploaded)", chat_id, call.message.message_id, reply_markup=markup)
+        except Exception as e: logger.error(f"Error editing msg for empty file list: {e}")
+        return
+    bot.answer_callback_query(call.id) 
+    markup = types.InlineKeyboardMarkup(row_width=1) 
+    for file_name, file_type in sorted(user_files_list): 
+        is_running = is_bot_running(user_id, file_name) # Use user_id for status check
+        status_icon = "🟢 Running" if is_running else "🔴 Stopped"
+        btn_text = f"{file_name} ({file_type}) - {status_icon}"
+        # Callback includes user_id as script_owner_id
+        markup.add(types.InlineKeyboardButton(btn_text, callback_data=f'file_{user_id}_{file_name}'))
+    markup.add(types.InlineKeyboardButton("🔙 Back to Main", callback_data='back_to_main'))
+    markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data='cancel_action'))
+    try:
+        bot.edit_message_text("📂 Your files:\nClick to manage.", chat_id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
+    except telebot.apihelper.ApiTelegramException as e:
+         if "message is not modified" in str(e): logger.warning("Msg not modified (files).")
+         else: logger.error(f"Error editing msg for file list: {e}")
+    except Exception as e: logger.error(f"Unexpected error editing msg for file list: {e}", exc_info=True)
+
+def file_control_callback(call):
+    try:
+        _, script_owner_id_str, file_name = call.data.split('_', 2)
+        script_owner_id = int(script_owner_id_str)
+        requesting_user_id = call.from_user.id
+
+        # Allow owner/admin to control any file, or user to control their own
+        if not (requesting_user_id == script_owner_id or requesting_user_id in admin_ids):
+            logger.warning(f"User {requesting_user_id} tried to access file '{file_name}' of user {script_owner_id} without permission.")
+            bot.answer_callback_query(call.id, "⚠️ You can only manage your own files.", show_alert=True)
+            check_files_callback(call) # Show their own files
+            return
+
+        user_files_list = user_files.get(script_owner_id, [])
+        if not any(f[0] == file_name for f in user_files_list):
+            logger.warning(f"File '{file_name}' not found for user {script_owner_id} during control.")
+            bot.answer_callback_query(call.id, "⚠️ File not found.", show_alert=True)
+            # If admin was viewing, this might be confusing. For now, just show their own.
+            check_files_callback(call) 
+            return
+
+        bot.answer_callback_query(call.id) 
+        is_running = is_bot_running(script_owner_id, file_name)
+        status_text = '🟢 Running' if is_running else '🔴 Stopped'
+        file_type = next((f[1] for f in user_files_list if f[0] == file_name), '?') 
+        try:
+            bot.edit_message_text(
+                f"⚙️ Controls for: `{file_name}` ({file_type}) of User `{script_owner_id}`\nStatus: {status_text}"
+                + bot_extra_info(script_owner_id, file_name),
+                call.message.chat.id, call.message.message_id,
+                reply_markup=create_control_buttons(script_owner_id, file_name, is_running),
+                parse_mode='Markdown'
             )
-            res_json = r.json()
-            data = res_json.get("data") if isinstance(res_json.get("data"), dict) else res_json
-            full_num = str(data.get("full_number") or data.get("number") or "").strip()
-            if not full_num:
-                return {"ok": False, "message": res_json.get("message", "Out of stock or invalid range.")}
-            no_plus = full_num.lstrip("+")
-            nat_num = str(data.get("national_number") or no_plus).strip()
-            country = str(data.get("country") or "Default")
-            operator = str(data.get("operator") or "")
+        except telebot.apihelper.ApiTelegramException as e:
+             if "message is not modified" in str(e): logger.warning(f"Msg not modified (controls for {file_name})")
+             else: raise 
+    except (ValueError, IndexError) as ve:
+        logger.error(f"Error parsing file control callback: {ve}. Data: '{call.data}'")
+        bot.answer_callback_query(call.id, "Error: Invalid action data.", show_alert=True)
+    except Exception as e:
+        logger.error(f"Error in file_control_callback for data '{call.data}': {e}", exc_info=True)
+        bot.answer_callback_query(call.id, "An error occurred.", show_alert=True)
+
+def start_bot_callback(call):
+    try:
+        _, script_owner_id_str, file_name = call.data.split('_', 2)
+        script_owner_id = int(script_owner_id_str)
+        requesting_user_id = call.from_user.id
+        chat_id_for_reply = call.message.chat.id # Where the admin/user gets the reply
+
+        logger.info(f"Start request: Requester={requesting_user_id}, Owner={script_owner_id}, File='{file_name}'")
+
+        if not (requesting_user_id == script_owner_id or requesting_user_id in admin_ids):
+            bot.answer_callback_query(call.id, "⚠️ Permission denied to start this script.", show_alert=True); return
+
+        user_files_list = user_files.get(script_owner_id, [])
+        file_info = next((f for f in user_files_list if f[0] == file_name), None)
+        if not file_info:
+            bot.answer_callback_query(call.id, "⚠️ File not found.", show_alert=True); check_files_callback(call); return
+
+        file_type = file_info[1]
+        user_folder, file_path = resolve_bot_paths(script_owner_id, file_name)
+
+        if not os.path.exists(file_path):
+            bot.answer_callback_query(call.id, f"⚠️ Error: File `{file_name}` missing! Re-upload.", show_alert=True)
+            remove_user_file_db(script_owner_id, file_name); check_files_callback(call); return
+
+        if is_bot_running(script_owner_id, file_name):
+            bot.answer_callback_query(call.id, f"⚠️ Script '{file_name}' already running.", show_alert=True)
+            try: bot.edit_message_reply_markup(chat_id_for_reply, call.message.message_id, reply_markup=create_control_buttons(script_owner_id, file_name, True))
+            except Exception as e: logger.error(f"Error updating buttons (already running): {e}")
+            return
+
+        bot.answer_callback_query(call.id, f"⏳ Attempting to start {file_name} for user {script_owner_id}...")
+
+        # Pass call.message as message_obj_for_reply so feedback goes to the person who clicked
+        if file_type == 'py':
+            threading.Thread(target=run_script, args=(file_path, script_owner_id, user_folder, file_name, call.message)).start()
+        elif file_type == 'js':
+            threading.Thread(target=run_js_script, args=(file_path, script_owner_id, user_folder, file_name, call.message)).start()
+        else:
+             bot.send_message(chat_id_for_reply, f"❌ Error: Unknown file type '{file_type}' for '{file_name}'."); return 
+
+        time.sleep(1.5) # Give script time to actually start or fail early
+        is_now_running = is_bot_running(script_owner_id, file_name) 
+        status_text = '🟢 Running' if is_now_running else '🟡 Starting (or failed, check logs/replies)'
+        try:
+            bot.edit_message_text(
+                f"⚙️ Controls for: `{file_name}` ({file_type}) of User `{script_owner_id}`\nStatus: {status_text}",
+                chat_id_for_reply, call.message.message_id,
+                reply_markup=create_control_buttons(script_owner_id, file_name, is_now_running), parse_mode='Markdown'
+            )
+        except telebot.apihelper.ApiTelegramException as e:
+             if "message is not modified" in str(e): logger.warning(f"Msg not modified after starting {file_name}")
+             else: raise
+    except (ValueError, IndexError) as e:
+        logger.error(f"Error parsing start callback '{call.data}': {e}")
+        bot.answer_callback_query(call.id, "Error: Invalid start command.", show_alert=True)
+    except Exception as e:
+        logger.error(f"Error in start_bot_callback for '{call.data}': {e}", exc_info=True)
+        bot.answer_callback_query(call.id, "Error starting script.", show_alert=True)
+        try: # Attempt to reset buttons to 'stopped' state on error
+            _, script_owner_id_err_str, file_name_err = call.data.split('_', 2)
+            script_owner_id_err = int(script_owner_id_err_str)
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=create_control_buttons(script_owner_id_err, file_name_err, False))
+        except Exception as e_btn: logger.error(f"Failed to update buttons after start error: {e_btn}")
+
+def stop_bot_callback(call):
+    try:
+        _, script_owner_id_str, file_name = call.data.split('_', 2)
+        script_owner_id = int(script_owner_id_str)
+        requesting_user_id = call.from_user.id
+        chat_id_for_reply = call.message.chat.id
+
+        logger.info(f"Stop request: Requester={requesting_user_id}, Owner={script_owner_id}, File='{file_name}'")
+        if not (requesting_user_id == script_owner_id or requesting_user_id in admin_ids):
+            bot.answer_callback_query(call.id, "⚠️ Permission denied.", show_alert=True); return
+
+        user_files_list = user_files.get(script_owner_id, [])
+        file_info = next((f for f in user_files_list if f[0] == file_name), None)
+        if not file_info:
+            bot.answer_callback_query(call.id, "⚠️ File not found.", show_alert=True); check_files_callback(call); return
+
+        file_type = file_info[1] 
+        script_key = f"{script_owner_id}_{file_name}"
+
+        if not is_bot_running(script_owner_id, file_name): 
+            bot.answer_callback_query(call.id, f"⚠️ Script '{file_name}' already stopped.", show_alert=True)
+            try:
+                 bot.edit_message_text(
+                     f"⚙️ Controls for: `{file_name}` ({file_type}) of User `{script_owner_id}`\nStatus: 🔴 Stopped",
+                     chat_id_for_reply, call.message.message_id,
+                     reply_markup=create_control_buttons(script_owner_id, file_name, False), parse_mode='Markdown')
+            except Exception as e: logger.error(f"Error updating buttons (already stopped): {e}")
+            return
+
+        bot.answer_callback_query(call.id, f"⏳ Stopping {file_name} for user {script_owner_id}...")
+        process_info = bot_scripts.get(script_key)
+        if process_info:
+            kill_process_tree(process_info)
+            if script_key in bot_scripts: del bot_scripts[script_key]; logger.info(f"Removed {script_key} from running after stop.")
+        else: logger.warning(f"Script {script_key} running by psutil but not in bot_scripts dict.")
+
+        try:
+            bot.edit_message_text(
+                f"⚙️ Controls for: `{file_name}` ({file_type}) of User `{script_owner_id}`\nStatus: 🔴 Stopped",
+                chat_id_for_reply, call.message.message_id,
+                reply_markup=create_control_buttons(script_owner_id, file_name, False), parse_mode='Markdown'
+            )
+        except telebot.apihelper.ApiTelegramException as e:
+             if "message is not modified" in str(e): logger.warning(f"Msg not modified after stopping {file_name}")
+             else: raise
+    except (ValueError, IndexError) as e:
+        logger.error(f"Error parsing stop callback '{call.data}': {e}")
+        bot.answer_callback_query(call.id, "Error: Invalid stop command.", show_alert=True)
+    except Exception as e:
+        logger.error(f"Error in stop_bot_callback for '{call.data}': {e}", exc_info=True)
+        bot.answer_callback_query(call.id, "Error stopping script.", show_alert=True)
+
+def restart_bot_callback(call):
+    try:
+        _, script_owner_id_str, file_name = call.data.split('_', 2)
+        script_owner_id = int(script_owner_id_str)
+        requesting_user_id = call.from_user.id
+        chat_id_for_reply = call.message.chat.id
+
+        logger.info(f"Restart: Requester={requesting_user_id}, Owner={script_owner_id}, File='{file_name}'")
+        if not (requesting_user_id == script_owner_id or requesting_user_id in admin_ids):
+            bot.answer_callback_query(call.id, "⚠️ Permission denied.", show_alert=True); return
+
+        user_files_list = user_files.get(script_owner_id, [])
+        file_info = next((f for f in user_files_list if f[0] == file_name), None)
+        if not file_info:
+            bot.answer_callback_query(call.id, "⚠️ File not found.", show_alert=True); check_files_callback(call); return
+
+        file_type = file_info[1]
+        user_folder, file_path = resolve_bot_paths(script_owner_id, file_name); script_key = f"{script_owner_id}_{file_name}"
+
+        if not os.path.exists(file_path):
+            bot.answer_callback_query(call.id, f"⚠️ Error: File `{file_name}` missing! Re-upload.", show_alert=True)
+            remove_user_file_db(script_owner_id, file_name)
+            if script_key in bot_scripts: del bot_scripts[script_key]
+            check_files_callback(call); return
+
+        bot.answer_callback_query(call.id, f"⏳ Restarting {file_name} for user {script_owner_id}...")
+        if is_bot_running(script_owner_id, file_name):
+            logger.info(f"Restart: Stopping existing {script_key}...")
+            process_info = bot_scripts.get(script_key)
+            if process_info: kill_process_tree(process_info)
+            if script_key in bot_scripts: del bot_scripts[script_key]
+            time.sleep(1.5) 
+
+        logger.info(f"Restart: Starting script {script_key}...")
+        if file_type == 'py':
+            threading.Thread(target=run_script, args=(file_path, script_owner_id, user_folder, file_name, call.message)).start()
+        elif file_type == 'js':
+            threading.Thread(target=run_js_script, args=(file_path, script_owner_id, user_folder, file_name, call.message)).start()
+        else:
+             bot.send_message(chat_id_for_reply, f"❌ Unknown type '{file_type}' for '{file_name}'."); return
+
+        time.sleep(1.5) 
+        is_now_running = is_bot_running(script_owner_id, file_name) 
+        status_text = '🟢 Running' if is_now_running else '🟡 Starting (or failed)'
+        try:
+            bot.edit_message_text(
+                f"⚙️ Controls for: `{file_name}` ({file_type}) of User `{script_owner_id}`\nStatus: {status_text}",
+                chat_id_for_reply, call.message.message_id,
+                reply_markup=create_control_buttons(script_owner_id, file_name, is_now_running), parse_mode='Markdown'
+            )
+        except telebot.apihelper.ApiTelegramException as e:
+             if "message is not modified" in str(e): logger.warning(f"Msg not modified (restart {file_name})")
+             else: raise
+    except (ValueError, IndexError) as e:
+        logger.error(f"Error parsing restart callback '{call.data}': {e}")
+        bot.answer_callback_query(call.id, "Error: Invalid restart command.", show_alert=True)
+    except Exception as e:
+        logger.error(f"Error in restart_bot_callback for '{call.data}': {e}", exc_info=True)
+        bot.answer_callback_query(call.id, "Error restarting.", show_alert=True)
+        try:
+            _, script_owner_id_err_str, file_name_err = call.data.split('_', 2)
+            script_owner_id_err = int(script_owner_id_err_str)
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=create_control_buttons(script_owner_id_err, file_name_err, False))
+        except Exception as e_btn: logger.error(f"Failed to update buttons after restart error: {e_btn}")
+
+
+def _check_bot_access(call):
+    """Shared permission check for per-bot buttons. Returns (owner_id, file_name) or None."""
+    _, owner_str, file_name = call.data.split('_', 2)
+    owner_id = int(owner_str)
+    if not (call.from_user.id == owner_id or call.from_user.id in admin_ids):
+        bot.answer_callback_query(call.id, "⚠️ Permission denied.", show_alert=True); return None
+    if not any(f[0] == file_name for f in user_files.get(owner_id, [])):
+        bot.answer_callback_query(call.id, "⚠️ File not found.", show_alert=True); check_files_callback(call); return None
+    return owner_id, file_name
+
+def delete_bot_callback(call):
+    """Step 1: ask for delete confirmation."""
+    try:
+        access = _check_bot_access(call)
+        if not access: return
+        owner_id, file_name = access
+        bot.answer_callback_query(call.id)
+        if is_legacy_bot(owner_id, file_name):
+            scope = "the script and its log (legacy bot: other files in the shared folder are kept)"
+        else:
+            scope = "the script and its associated files (the whole bot folder)"
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(types.InlineKeyboardButton("🗑️ Yes, delete permanently", callback_data=f'confirmdel_{owner_id}_{file_name}'))
+        markup.add(types.InlineKeyboardButton("🔙 Cancel", callback_data=f'file_{owner_id}_{file_name}'))
+        bot.edit_message_text(f"⚠️ Delete `{file_name}`?\nThis removes {scope}. It cannot be undone.",
+                              call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
+    except (ValueError, IndexError) as e:
+        logger.error(f"Error parsing delete callback '{call.data}': {e}")
+        bot.answer_callback_query(call.id, "Error: Invalid delete command.", show_alert=True)
+    except Exception as e:
+        logger.error(f"Error in delete_bot_callback for '{call.data}': {e}", exc_info=True)
+        bot.answer_callback_query(call.id, "Error deleting.", show_alert=True)
+
+def confirm_delete_callback(call):
+    """Step 2: really delete. The whole bot folder (incl. its database) is removed, so a re-host starts clean."""
+    try:
+        access = _check_bot_access(call)
+        if not access: return
+        script_owner_id, file_name = access
+        chat_id_for_reply = call.message.chat.id
+        logger.info(f"Delete confirmed: Requester={call.from_user.id}, Owner={script_owner_id}, File='{file_name}'")
+
+        bot.answer_callback_query(call.id, f"🗑️ Deleting {file_name}...")
+        script_key = f"{script_owner_id}_{file_name}"
+        if is_bot_running(script_owner_id, file_name):
+            process_info = bot_scripts.get(script_key)
+            if process_info: kill_process_tree(process_info)
+            if script_key in bot_scripts: del bot_scripts[script_key]
+            time.sleep(1.0)
+        elif script_key in bot_scripts:
+            del bot_scripts[script_key]
+
+        work_dir, file_path = resolve_bot_paths(script_owner_id, file_name)
+        legacy = is_legacy_bot(script_owner_id, file_name)
+        deleted_disk = []
+        if legacy:
+            log_path = os.path.join(work_dir, f"{os.path.splitext(file_name)[0]}.log")
+            for p in (file_path, log_path):
+                if os.path.exists(p):
+                    try: os.remove(p); deleted_disk.append(os.path.basename(p))
+                    except OSError as e: logger.error(f"Error deleting {p}: {e}")
+            env_dir = get_instance_dir(script_owner_id, file_name) # holds only the bot's .env
+            if os.path.isdir(env_dir) and rmtree_force(env_dir): deleted_disk.append('.env')
+        else:
+            if os.path.isdir(work_dir):
+                if rmtree_force(work_dir): deleted_disk.append('bot folder + database')
+                else: logger.error(f"Could not fully remove {work_dir}")
+
+        remove_user_file_db(script_owner_id, file_name)
+        deleted_str = ", ".join(f"`{f}`" for f in deleted_disk) if deleted_disk else "associated files"
+        try:
+            bot.edit_message_text(f"🗑️ `{file_name}` (User `{script_owner_id}`) deleted: {deleted_str}",
+                                  chat_id_for_reply, call.message.message_id, reply_markup=None, parse_mode='Markdown')
+        except Exception as e:
+            logger.error(f"Error editing msg after delete: {e}")
+            bot.send_message(chat_id_for_reply, f"🗑️ `{file_name}` deleted.", parse_mode='Markdown')
+    except (ValueError, IndexError) as e:
+        logger.error(f"Error parsing confirmdel callback '{call.data}': {e}")
+        bot.answer_callback_query(call.id, "Error: Invalid delete command.", show_alert=True)
+    except Exception as e:
+        logger.error(f"Error in confirm_delete_callback for '{call.data}': {e}", exc_info=True)
+        bot.answer_callback_query(call.id, "Error deleting.", show_alert=True)
+
+def db_bot_callback(call):
+    """Download the database file(s) of ONE bot."""
+    try:
+        access = _check_bot_access(call)
+        if not access: return
+        owner_id, file_name = access
+        work_dir, _ = resolve_bot_paths(owner_id, file_name)
+        db_files = find_bot_db_files(work_dir)
+        if not db_files:
+            bot.answer_callback_query(call.id, "ℹ️ No database files found for this bot yet.", show_alert=True); return
+        bot.answer_callback_query(call.id, "📥 Preparing database...")
+        threading.Thread(target=send_bot_databases, args=(call.message.chat.id, work_dir, db_files, file_name)).start()
+    except (ValueError, IndexError) as e:
+        logger.error(f"Error parsing db callback '{call.data}': {e}")
+        bot.answer_callback_query(call.id, "Error: Invalid command.", show_alert=True)
+    except Exception as e:
+        logger.error(f"Error in db_bot_callback for '{call.data}': {e}", exc_info=True)
+        bot.answer_callback_query(call.id, "Error exporting database.", show_alert=True)
+
+def env_bot_callback(call):
+    """Env menu of ONE hosted bot: add / remove variables, or upload a .env file."""
+    try:
+        access = _check_bot_access(call)
+        if not access: return
+        owner_id, file_name = access
+        bot.answer_callback_query(call.id)
+        keys = list(read_bot_env(get_instance_dir(owner_id, file_name)).keys())
+        current = ", ".join(f"`{k}`" for k in keys) if keys else "(none yet)"
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.row(types.InlineKeyboardButton("➕ Add Variable", callback_data=f'envadd_{owner_id}_{file_name}'),
+                   types.InlineKeyboardButton("➖ Remove Variable", callback_data=f'envrm_{owner_id}_{file_name}'))
+        markup.row(types.InlineKeyboardButton("📄 Upload .env / Paste", callback_data=f'envup_{owner_id}_{file_name}'))
+        markup.row(types.InlineKeyboardButton("🔙 Back", callback_data=f'file_{owner_id}_{file_name}'))
+        markup.row(types.InlineKeyboardButton("❌ Cancel", callback_data='cancel_action'))
+        bot.send_message(call.message.chat.id,
+            f"🔑 *Env variables for* `{file_name}`\nKeys: {current}\n\n"
+            "Your script reads them with `os.getenv('NAME')` (Python) or `process.env.NAME` (JS).\n"
+            "Values are never shown again.", reply_markup=markup, parse_mode='Markdown')
+    except (ValueError, IndexError) as e:
+        logger.error(f"Error parsing env callback '{call.data}': {e}")
+        bot.answer_callback_query(call.id, "Error: Invalid command.", show_alert=True)
+    except Exception as e:
+        logger.error(f"Error in env_bot_callback for '{call.data}': {e}", exc_info=True)
+        bot.answer_callback_query(call.id, "Error.", show_alert=True)
+
+def envadd_callback(call):
+    access = _check_bot_access(call)
+    if not access: return
+    owner_id, file_name = access
+    bot.answer_callback_query(call.id)
+    msg = bot.send_message(call.message.chat.id, "➕ Send the variable *NAME* (example: `BOT_TOKEN`).\nUse Cancel below to abort.", parse_mode='Markdown', reply_markup=cancel_markup())
+    bot.register_next_step_handler(msg, process_env_key, owner_id, file_name)
+
+def process_env_key(message, owner_id, file_name):
+    if not (message.from_user.id == owner_id or message.from_user.id in admin_ids): return
+    if message.content_type != 'text': bot.reply_to(message, "⚠️ Send the name as text."); return
+    key = message.text.strip()
+    if key.lower() == '/cancel': bot.reply_to(message, "Cancelled."); return
+    if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,63}', key):
+        msg = bot.reply_to(message, "⚠️ Invalid name. Use letters, digits, `_` (e.g. `BOT_TOKEN`). Try again or press Cancel.", parse_mode='Markdown', reply_markup=cancel_markup())
+        bot.register_next_step_handler(msg, process_env_key, owner_id, file_name); return
+    msg = bot.reply_to(message, f"✏️ Now send the *VALUE* for `{key}`.\n🔒 Your message will be deleted after saving. Use Cancel below to abort.", parse_mode='Markdown', reply_markup=cancel_markup())
+    bot.register_next_step_handler(msg, process_env_value, owner_id, file_name, key)
+
+def process_env_value(message, owner_id, file_name, key):
+    if not (message.from_user.id == owner_id or message.from_user.id in admin_ids): return
+    if message.content_type != 'text': bot.reply_to(message, "⚠️ Send the value as text."); return
+    value = message.text.strip()
+    if value.lower() == '/cancel': bot.reply_to(message, "Cancelled."); return
+    if not value or len(value) > 4096:
+        msg = bot.reply_to(message, "⚠️ Value is empty or too long. Send again or press Cancel.", reply_markup=cancel_markup())
+        bot.register_next_step_handler(msg, process_env_value, owner_id, file_name, key); return
+    try:
+        env_dir = get_instance_dir(owner_id, file_name)
+        current = read_bot_env(env_dir)
+        if key not in current and len(current) >= 50: bot.reply_to(message, "⚠️ Max 50 variables."); return
+        current[key] = value; write_bot_env(env_dir, current)
+        try: bot.delete_message(message.chat.id, message.message_id)
+        except Exception: pass
+        running = is_bot_running(owner_id, file_name)
+        note = "🔄 Restart the bot to apply." if running else "▶️ Press Start to run."
+        bot.send_message(message.chat.id, f"✅ `{key}` saved.\n{note}", reply_markup=create_control_buttons(owner_id, file_name, running), parse_mode='Markdown')
+    except Exception as e:
+        logger.error(f"Error saving env value: {e}", exc_info=True); bot.reply_to(message, "❌ Could not save.")
+
+def envrm_callback(call):
+    access = _check_bot_access(call)
+    if not access: return
+    owner_id, file_name = access
+    keys = list(read_bot_env(get_instance_dir(owner_id, file_name)).keys())
+    if not keys: bot.answer_callback_query(call.id, "No variables to remove.", show_alert=True); return
+    bot.answer_callback_query(call.id)
+    msg = bot.send_message(call.message.chat.id, "➖ Send the NAME to remove:\n" + ", ".join(f"`{k}`" for k in keys) + "\nUse Cancel below to abort.", parse_mode='Markdown', reply_markup=cancel_markup())
+    bot.register_next_step_handler(msg, process_env_remove, owner_id, file_name)
+
+def process_env_remove(message, owner_id, file_name):
+    if not (message.from_user.id == owner_id or message.from_user.id in admin_ids): return
+    if message.content_type != 'text': bot.reply_to(message, "⚠️ Send the name as text."); return
+    key = message.text.strip()
+    if key.lower() == '/cancel': bot.reply_to(message, "Cancelled."); return
+    env_dir = get_instance_dir(owner_id, file_name); current = read_bot_env(env_dir)
+    if key not in current: bot.reply_to(message, f"⚠️ `{key}` not found.", parse_mode='Markdown'); return
+    del current[key]; write_bot_env(env_dir, current)
+    running = is_bot_running(owner_id, file_name)
+    bot.reply_to(message, f"✅ `{key}` removed." + (" 🔄 Restart to apply." if running else ""),
+                 reply_markup=create_control_buttons(owner_id, file_name, running), parse_mode='Markdown')
+
+def envup_callback(call):
+    access = _check_bot_access(call)
+    if not access: return
+    owner_id, file_name = access
+    bot.answer_callback_query(call.id)
+    msg = bot.send_message(call.message.chat.id,
+        "📄 Send a `.env` file, or paste lines like `NAME=value`.\n🔒 Your message is deleted after saving. /cancel to abort.", parse_mode='Markdown')
+    bot.register_next_step_handler(msg, process_env_input, owner_id, file_name)
+
+def process_env_input(message, owner_id, file_name):
+    requester = message.from_user.id
+    if not (requester == owner_id or requester in admin_ids): return
+    if not any(f[0] == file_name for f in user_files.get(owner_id, [])):
+        bot.reply_to(message, "⚠️ That bot no longer exists."); return
+    retry = lambda text: (bot.reply_to(message, text),
+                          bot.register_next_step_handler(message, process_env_input, owner_id, file_name))
+    try:
+        raw_text = None
+        if message.content_type == 'document':
+            doc = message.document; name = (doc.file_name or '').lower()
+            if not (name == '.env' or name.endswith('.env') or name.endswith('.txt')):
+                retry("⚠️ Please send a `.env` file, KEY=VALUE text, or the bot token. /cancel to abort."); return
+            if doc.file_size and doc.file_size > MAX_ENV_BYTES:
+                retry("⚠️ File too large for an env file (max 64 KB)."); return
+            raw_text = bot.download_file(bot.get_file(doc.file_id).file_path).decode('utf-8', errors='ignore')
+        elif message.content_type == 'text':
+            if message.text.strip().lower() == '/cancel': bot.reply_to(message, "Env update cancelled."); return
+            raw_text = message.text
+        else:
+            retry("⚠️ Send a `.env` file or text. /cancel to abort."); return
+
+        new_vars = _parse_env_text(raw_text)
+        if not new_vars and message.content_type == 'text' and TOKEN_PATTERN.fullmatch(raw_text.strip()):
+            new_vars = {'BOT_TOKEN': raw_text.strip()}
+        if not new_vars:
+            retry("⚠️ No valid KEY=VALUE lines found. Example: `BOT_TOKEN=123456:ABC...`  (/cancel to abort)"); return
+        if len(new_vars) > 50 or any(len(v) > 4096 for v in new_vars.values()):
+            retry("⚠️ Too many variables or a value is too long."); return
+
+        env_dir = get_instance_dir(owner_id, file_name)
+        current = read_bot_env(env_dir); current.update(new_vars)
+        write_bot_env(env_dir, current)
+        logger.info(f"Env updated for {owner_id}/{file_name}: keys={list(new_vars.keys())}")
+
+        try: bot.delete_message(message.chat.id, message.message_id) # remove the secret from the chat
+        except Exception: pass
+        running = is_bot_running(owner_id, file_name)
+        note = "🔄 Restart the bot to apply." if running else "▶️ Press Start to run with the new settings."
+        saved = ", ".join(f"`{k}`" for k in new_vars)
+        bot.send_message(message.chat.id, f"✅ Saved {len(new_vars)} variable(s): {saved}\n(your message was deleted)\n{note}",
+                         reply_markup=create_control_buttons(owner_id, file_name, running), parse_mode='Markdown')
+    except Exception as e:
+        logger.error(f"Error processing env input: {e}", exc_info=True)
+        bot.reply_to(message, "❌ Could not save env settings.")
+
+def logs_bot_callback(call):
+    try:
+        _, script_owner_id_str, file_name = call.data.split('_', 2)
+        script_owner_id = int(script_owner_id_str)
+        requesting_user_id = call.from_user.id
+        chat_id_for_reply = call.message.chat.id
+
+        logger.info(f"Logs: Requester={requesting_user_id}, Owner={script_owner_id}, File='{file_name}'")
+        if not (requesting_user_id == script_owner_id or requesting_user_id in admin_ids):
+            bot.answer_callback_query(call.id, "⚠️ Permission denied.", show_alert=True); return
+
+        user_files_list = user_files.get(script_owner_id, [])
+        if not any(f[0] == file_name for f in user_files_list):
+            bot.answer_callback_query(call.id, "⚠️ File not found.", show_alert=True); check_files_callback(call); return
+
+        user_folder, _script_path = resolve_bot_paths(script_owner_id, file_name)
+        log_path = os.path.join(user_folder, f"{os.path.splitext(file_name)[0]}.log")
+        if not os.path.exists(log_path):
+            bot.answer_callback_query(call.id, f"⚠️ No logs for '{file_name}'.", show_alert=True); return
+
+        bot.answer_callback_query(call.id) 
+        try:
+            log_content = ""; file_size = os.path.getsize(log_path)
+            max_log_kb = 100; max_tg_msg = 4096
+            if file_size == 0: log_content = "(Log empty)"
+            elif file_size > max_log_kb * 1024:
+                 with open(log_path, 'rb') as f: f.seek(-max_log_kb * 1024, os.SEEK_END); log_bytes = f.read()
+                 log_content = log_bytes.decode('utf-8', errors='ignore')
+                 log_content = f"(Last {max_log_kb} KB)\n...\n" + log_content
+            else:
+                 with open(log_path, 'r', encoding='utf-8', errors='ignore') as f: log_content = f.read()
+
+            if len(log_content) > max_tg_msg:
+                log_content = log_content[-max_tg_msg:]
+                first_nl = log_content.find('\n')
+                if first_nl != -1: log_content = "...\n" + log_content[first_nl+1:]
+                else: log_content = "...\n" + log_content 
+            if not log_content.strip(): log_content = "(No visible content)"
+            log_content = TOKEN_PATTERN.sub('<redacted-token>', log_content) # never show tokens in chat
+
+            bot.send_message(chat_id_for_reply, f"📜 Logs for `{file_name}` (User `{script_owner_id}`):\n```\n{log_content}\n```", parse_mode='Markdown')
+        except Exception as e:
+            logger.error(f"Error reading/sending log {log_path}: {e}", exc_info=True)
+            bot.send_message(chat_id_for_reply, f"❌ Error reading log for `{file_name}`.")
+    except (ValueError, IndexError) as e:
+        logger.error(f"Error parsing logs callback '{call.data}': {e}")
+        bot.answer_callback_query(call.id, "Error: Invalid logs command.", show_alert=True)
+    except Exception as e:
+        logger.error(f"Error in logs_bot_callback for '{call.data}': {e}", exc_info=True)
+        bot.answer_callback_query(call.id, "Error fetching logs.", show_alert=True)
+
+def speed_callback(call):
+    user_id = call.from_user.id
+    chat_id = call.message.chat.id
+    start_cb_ping_time = time.time() 
+    try:
+        bot.edit_message_text("🏃 Testing speed...", chat_id, call.message.message_id)
+        bot.send_chat_action(chat_id, 'typing') 
+        response_time = round((time.time() - start_cb_ping_time) * 1000, 2)
+        status = "🔓 Unlocked" if not bot_locked else "🔒 Locked"
+        # mode = "💰 Free Mode: ON" if free_mode else "💸 Free Mode: OFF" # Removed
+        if user_id == OWNER_ID: user_level = "👑 Owner"
+        elif user_id in admin_ids: user_level = "🛡️ Admin"
+        elif user_id in user_subscriptions and user_subscriptions[user_id].get('expiry', datetime.min) > datetime.now(): user_level = "⭐ Premium"
+        else: user_level = "🆓 Free User"
+        speed_msg = (f"⚡ Bot Speed & Status:\n\n⏱️ API Response Time: {response_time} ms\n"
+                     f"🚦 Bot Status: {status}\n"
+                     # f"模式 Mode: {mode}\n" # Removed
+                     f"👤 Your Level: {active_package_for_user(user_id)['name'] if active_package_for_user(user_id) else ('🆓 No package' if user_level == '🆓 Free User' else user_level)}")
+        bot.answer_callback_query(call.id) 
+        bot.edit_message_text(speed_msg, chat_id, call.message.message_id, reply_markup=create_main_menu_inline(user_id))
+    except Exception as e:
+         logger.error(f"Error during speed test (cb): {e}", exc_info=True)
+         bot.answer_callback_query(call.id, "Error in speed test.", show_alert=True)
+         try: bot.edit_message_text("〽️ Main Menu", chat_id, call.message.message_id, reply_markup=create_main_menu_inline(user_id))
+         except Exception: pass
+
+def back_to_main_callback(call):
+    user_id = call.from_user.id
+    chat_id = call.message.chat.id
+    file_limit = get_user_file_limit(user_id)
+    current_files = get_user_file_count(user_id)
+    limit_str = str(file_limit) if file_limit != float('inf') else "Unlimited"
+    expiry_info = ""
+    if user_id == OWNER_ID: user_status = "👑 Owner"
+    elif user_id in admin_ids: user_status = "🛡️ Admin"
+    elif user_id in user_subscriptions:
+        expiry_date = user_subscriptions[user_id].get('expiry')
+        if expiry_date and expiry_date > datetime.now():
+            user_status = "⭐ Premium"; days_left = (expiry_date - datetime.now()).days
+            expiry_info = f"\n⏳ Subscription expires in: {days_left} days"
+        else: user_status = "🆓 Free User (Expired Sub)" # Will be cleaned up by welcome if not already
+    else: user_status = "🆓 Free User"
+    main_menu_text = (f"〽️ Welcome back, {call.from_user.first_name}!\n\n🆔 ID: `{user_id}`\n"
+                      f"🔰 Status: {user_status}{expiry_info}\n📁 Files: {current_files} / {limit_str}\n\n"
+                      f"👇 Use buttons or type commands.")
+    try:
+        bot.answer_callback_query(call.id)
+        bot.edit_message_text(main_menu_text, chat_id, call.message.message_id,
+                              reply_markup=create_main_menu_inline(user_id), parse_mode='Markdown')
+    except telebot.apihelper.ApiTelegramException as e:
+         if "message is not modified" in str(e): logger.warning("Msg not modified (back_to_main).")
+         else: logger.error(f"API error on back_to_main: {e}")
+    except Exception as e: logger.error(f"Error handling back_to_main: {e}", exc_info=True)
+
+# --- Admin Callback Implementations (for Inline Buttons) ---
+def subscription_management_callback(call):
+    bot.answer_callback_query(call.id)
+    try:
+        bot.edit_message_text("💳 Subscription Management\nSelect action:",
+                              call.message.chat.id, call.message.message_id, reply_markup=create_subscription_menu())
+    except Exception as e: logger.error(f"Error showing sub menu: {e}")
+
+def stats_callback(call): # Called by user and admin
+    bot.answer_callback_query(call.id)
+    # The logic is now inside _logic_statistics which determines what to show based on user_id
+    # We need to pass a message-like object to _logic_statistics
+    # For callbacks, call.message can be used.
+    _logic_statistics(call.message) 
+    # To update the inline keyboard after showing stats, we need to edit the message
+    try:
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id,
+                                      reply_markup=create_main_menu_inline(call.from_user.id))
+    except Exception as e:
+        logger.error(f"Error updating menu after stats_callback: {e}")
+
+
+def lock_bot_callback(call):
+    global bot_locked; bot_locked = True
+    logger.warning(f"Bot locked by Admin {call.from_user.id}")
+    bot.answer_callback_query(call.id, "🔒 Bot locked.")
+    try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=create_main_menu_inline(call.from_user.id))
+    except Exception as e: logger.error(f"Error updating menu (lock): {e}")
+
+def unlock_bot_callback(call):
+    global bot_locked; bot_locked = False
+    logger.warning(f"Bot unlocked by Admin {call.from_user.id}")
+    bot.answer_callback_query(call.id, "🔓 Bot unlocked.")
+    try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=create_main_menu_inline(call.from_user.id))
+    except Exception as e: logger.error(f"Error updating menu (unlock): {e}")
+
+# def toggle_free_mode_callback(call): # Removed
+#     pass
+
+def run_all_scripts_callback(call): # Added
+    _logic_run_all_scripts(call) # Pass the call object
+
+
+def broadcast_init_callback(call):
+    bot.answer_callback_query(call.id)
+    msg = bot.send_message(call.message.chat.id, "📢 Send message to broadcast.\nUse Cancel below to abort.", reply_markup=cancel_markup())
+    bot.register_next_step_handler(msg, process_broadcast_message)
+
+def process_broadcast_message(message):
+    user_id = message.from_user.id
+    if user_id not in admin_ids: bot.reply_to(message, "⚠️ Not authorized."); return
+    if message.text and message.text.lower() == '/cancel': bot.reply_to(message, "Broadcast cancelled."); return
+
+    broadcast_content = message.text # Can also handle photos, videos etc. if message.content_type is checked
+    if not broadcast_content and not (message.photo or message.video or message.document or message.sticker or message.voice or message.audio): # If no text and no other media
+         bot.reply_to(message, "⚠️ Cannot broadcast empty message. Send text or media, or /cancel.")
+         msg = bot.send_message(message.chat.id, "📢 Send broadcast message or press Cancel.", reply_markup=cancel_markup())
+         bot.register_next_step_handler(msg, process_broadcast_message)
+         return
+
+    target_count = len(active_users)
+    markup = types.InlineKeyboardMarkup()
+    markup.row(types.InlineKeyboardButton("✅ Confirm & Send", callback_data=f"confirm_broadcast_{message.message_id}"),
+               types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_broadcast"))
+
+    preview_text = broadcast_content[:1000].strip() if broadcast_content else "(Media message)"
+    bot.reply_to(message, f"⚠️ Confirm Broadcast:\n\n```\n{preview_text}\n```\n" 
+                          f"To **{target_count}** users. Sure?", reply_markup=markup, parse_mode='Markdown')
+
+def handle_confirm_broadcast(call):
+    user_id = call.from_user.id
+    chat_id = call.message.chat.id
+    if user_id not in admin_ids: bot.answer_callback_query(call.id, "⚠️ Admin only.", show_alert=True); return
+    try:
+        original_message = call.message.reply_to_message
+        if not original_message: raise ValueError("Could not retrieve original message.")
+
+        # Check content type and get content
+        broadcast_text = None
+        broadcast_photo_id = None
+        broadcast_video_id = None
+        # Add other types as needed: document, sticker, voice, audio
+
+        if original_message.text:
+            broadcast_text = original_message.text
+        elif original_message.photo:
+            broadcast_photo_id = original_message.photo[-1].file_id # Get highest quality
+        elif original_message.video:
+            broadcast_video_id = original_message.video.file_id
+        # Add more elif for other content types
+        else:
+            raise ValueError("Message has no text or supported media for broadcast.")
+
+        bot.answer_callback_query(call.id, "🚀 Starting broadcast...")
+        bot.edit_message_text(f"📢 Broadcasting to {len(active_users)} users...",
+                              chat_id, call.message.message_id, reply_markup=None)
+        # Pass all potential content types to execute_broadcast
+        thread = threading.Thread(target=execute_broadcast, args=(
+            broadcast_text, broadcast_photo_id, broadcast_video_id, 
+            original_message.caption if (broadcast_photo_id or broadcast_video_id) else None, # Pass caption
+            chat_id))
+        thread.start()
+    except ValueError as ve: 
+        logger.error(f"Error retrieving msg for broadcast confirm: {ve}")
+        bot.edit_message_text(f"❌ Error starting broadcast: {ve}", chat_id, call.message.message_id, reply_markup=None)
+    except Exception as e:
+        logger.error(f"Error in handle_confirm_broadcast: {e}", exc_info=True)
+        bot.edit_message_text("❌ Unexpected error during broadcast confirm.", chat_id, call.message.message_id, reply_markup=None)
+
+def handle_cancel_broadcast(call):
+    bot.answer_callback_query(call.id, "Broadcast cancelled.")
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    # Optionally delete the original message too if call.message.reply_to_message exists
+    if call.message.reply_to_message:
+        try: bot.delete_message(call.message.chat.id, call.message.reply_to_message.message_id)
+        except: pass
+
+
+def execute_broadcast(broadcast_text, photo_id, video_id, caption, admin_chat_id):
+    sent_count = 0; failed_count = 0; blocked_count = 0
+    start_exec_time = time.time() 
+    users_to_broadcast = list(active_users); total_users = len(users_to_broadcast)
+    logger.info(f"Executing broadcast to {total_users} users.")
+    batch_size = 25; delay_batches = 1.5
+
+    for i, user_id_bc in enumerate(users_to_broadcast): # Renamed
+        try:
+            if broadcast_text:
+                bot.send_message(user_id_bc, broadcast_text, parse_mode='Markdown')
+            elif photo_id:
+                bot.send_photo(user_id_bc, photo_id, caption=caption, parse_mode='Markdown' if caption else None)
+            elif video_id:
+                bot.send_video(user_id_bc, video_id, caption=caption, parse_mode='Markdown' if caption else None)
+            # Add other send methods for other types
+            sent_count += 1
+        except telebot.apihelper.ApiTelegramException as e:
+            err_desc = str(e).lower()
+            if any(s in err_desc for s in ["bot was blocked", "user is deactivated", "chat not found", "kicked from", "restricted"]): 
+                logger.warning(f"Broadcast failed to {user_id_bc}: User blocked/inactive.")
+                blocked_count += 1
+            elif "flood control" in err_desc or "too many requests" in err_desc:
+                retry_after = 5; match = re.search(r"retry after (\d+)", err_desc)
+                if match: retry_after = int(match.group(1)) + 1 
+                logger.warning(f"Flood control. Sleeping {retry_after}s...")
+                time.sleep(retry_after)
+                try: # Retry once
+                    if broadcast_text: bot.send_message(user_id_bc, broadcast_text, parse_mode='Markdown')
+                    elif photo_id: bot.send_photo(user_id_bc, photo_id, caption=caption, parse_mode='Markdown' if caption else None)
+                    elif video_id: bot.send_video(user_id_bc, video_id, caption=caption, parse_mode='Markdown' if caption else None)
+                    sent_count += 1
+                except Exception as e_retry: logger.error(f"Broadcast retry failed to {user_id_bc}: {e_retry}"); failed_count +=1
+            else: logger.error(f"Broadcast failed to {user_id_bc}: {e}"); failed_count += 1
+        except Exception as e: logger.error(f"Unexpected error broadcasting to {user_id_bc}: {e}"); failed_count += 1
+
+        if (i + 1) % batch_size == 0 and i < total_users - 1:
+            logger.info(f"Broadcast batch {i//batch_size + 1} sent. Sleeping {delay_batches}s...")
+            time.sleep(delay_batches)
+        elif i % 5 == 0: time.sleep(0.2) 
+
+    duration = round(time.time() - start_exec_time, 2)
+    result_msg = (f"📢 Broadcast Complete!\n\n✅ Sent: {sent_count}\n❌ Failed: {failed_count}\n"
+                  f"🚫 Blocked/Inactive: {blocked_count}\n👥 Targets: {total_users}\n⏱️ Duration: {duration}s")
+    logger.info(result_msg)
+    try: bot.send_message(admin_chat_id, result_msg)
+    except Exception as e: logger.error(f"Failed to send broadcast result to admin {admin_chat_id}: {e}")
+
+def admin_panel_callback(call):
+    bot.answer_callback_query(call.id)
+    try:
+        bot.edit_message_text("👑 Admin Panel\nManage admins (Owner actions may be restricted).",
+                              call.message.chat.id, call.message.message_id, reply_markup=create_admin_panel())
+    except Exception as e: logger.error(f"Error showing admin panel: {e}")
+
+def add_admin_init_callback(call):
+    bot.answer_callback_query(call.id)
+    msg = bot.send_message(call.message.chat.id, "👑 Enter User ID to promote to Admin.\nUse Cancel below to abort.", reply_markup=cancel_markup())
+    bot.register_next_step_handler(msg, process_add_admin_id)
+
+def process_add_admin_id(message):
+    owner_id_check = message.from_user.id 
+    if owner_id_check != OWNER_ID: bot.reply_to(message, "⚠️ Owner only."); return
+    if message.text.lower() == '/cancel': bot.reply_to(message, "Admin promotion cancelled."); return
+    try:
+        new_admin_id = int(message.text.strip())
+        if new_admin_id <= 0: raise ValueError("ID must be positive")
+        if new_admin_id == OWNER_ID: bot.reply_to(message, "⚠️ Owner is already Owner."); return
+        if new_admin_id in admin_ids: bot.reply_to(message, f"⚠️ User `{new_admin_id}` already Admin."); return
+        add_admin_db(new_admin_id) 
+        logger.warning(f"Admin {new_admin_id} added by Owner {owner_id_check}.")
+        bot.reply_to(message, f"✅ User `{new_admin_id}` promoted to Admin.")
+        try: bot.send_message(new_admin_id, "🎉 Congrats! You are now an Admin.")
+        except Exception as e: logger.error(f"Failed to notify new admin {new_admin_id}: {e}")
+    except ValueError:
+        bot.reply_to(message, "⚠️ Invalid ID. Send numerical ID or /cancel.")
+        msg = bot.send_message(message.chat.id, "👑 Enter User ID to promote or press Cancel.", reply_markup=cancel_markup())
+        bot.register_next_step_handler(msg, process_add_admin_id)
+    except Exception as e: logger.error(f"Error processing add admin: {e}", exc_info=True); bot.reply_to(message, "Error.")
+
+def remove_admin_init_callback(call):
+    bot.answer_callback_query(call.id)
+    msg = bot.send_message(call.message.chat.id, "👑 Enter User ID of Admin to remove.\nUse Cancel below to abort.", reply_markup=cancel_markup())
+    bot.register_next_step_handler(msg, process_remove_admin_id)
+
+def process_remove_admin_id(message):
+    owner_id_check = message.from_user.id
+    if owner_id_check != OWNER_ID: bot.reply_to(message, "⚠️ Owner only."); return
+    if message.text.lower() == '/cancel': bot.reply_to(message, "Admin removal cancelled."); return
+    try:
+        admin_id_remove = int(message.text.strip()) # Renamed
+        if admin_id_remove <= 0: raise ValueError("ID must be positive")
+        if admin_id_remove == OWNER_ID: bot.reply_to(message, "⚠️ Owner cannot remove self."); return
+        if admin_id_remove not in admin_ids: bot.reply_to(message, f"⚠️ User `{admin_id_remove}` not Admin."); return
+        if remove_admin_db(admin_id_remove): 
+            logger.warning(f"Admin {admin_id_remove} removed by Owner {owner_id_check}.")
+            bot.reply_to(message, f"✅ Admin `{admin_id_remove}` removed.")
+            try: bot.send_message(admin_id_remove, "ℹ️ You are no longer an Admin.")
+            except Exception as e: logger.error(f"Failed to notify removed admin {admin_id_remove}: {e}")
+        else: bot.reply_to(message, f"❌ Failed to remove admin `{admin_id_remove}`. Check logs.")
+    except ValueError:
+        bot.reply_to(message, "⚠️ Invalid ID. Send numerical ID or /cancel.")
+        msg = bot.send_message(message.chat.id, "👑 Enter Admin ID to remove or press Cancel.", reply_markup=cancel_markup())
+        bot.register_next_step_handler(msg, process_remove_admin_id)
+    except Exception as e: logger.error(f"Error processing remove admin: {e}", exc_info=True); bot.reply_to(message, "Error.")
+
+def list_admins_callback(call):
+    bot.answer_callback_query(call.id)
+    try:
+        admin_list_str = "\n".join(f"- `{aid}` {'(Owner)' if aid == OWNER_ID else ''}" for aid in sorted(list(admin_ids)))
+        if not admin_list_str: admin_list_str = "(No Owner/Admins configured!)"
+        bot.edit_message_text(f"👑 Current Admins:\n\n{admin_list_str}", call.message.chat.id,
+                              call.message.message_id, reply_markup=create_admin_panel(), parse_mode='Markdown')
+    except Exception as e: logger.error(f"Error listing admins: {e}")
+
+def add_subscription_init_callback(call):
+    bot.answer_callback_query(call.id)
+    msg = bot.send_message(call.message.chat.id, "💳 Enter User ID & days (e.g., `12345678 30`).\nUse Cancel below to abort.", reply_markup=cancel_markup())
+    bot.register_next_step_handler(msg, process_add_subscription_details)
+
+def process_add_subscription_details(message):
+    admin_id_check = message.from_user.id 
+    if admin_id_check not in admin_ids: bot.reply_to(message, "⚠️ Not authorized."); return
+    if message.text.lower() == '/cancel': bot.reply_to(message, "Sub add cancelled."); return
+    try:
+        parts = message.text.split();
+        if len(parts) != 2: raise ValueError("Incorrect format")
+        sub_user_id = int(parts[0].strip()); days = int(parts[1].strip())
+        if sub_user_id <= 0 or days <= 0: raise ValueError("User ID/days must be positive")
+
+        current_expiry = user_subscriptions.get(sub_user_id, {}).get('expiry')
+        start_date_new_sub = datetime.now() # Renamed
+        if current_expiry and current_expiry > start_date_new_sub: start_date_new_sub = current_expiry
+        new_expiry = start_date_new_sub + timedelta(days=days)
+        save_subscription(sub_user_id, new_expiry)
+
+        logger.info(f"Sub for {sub_user_id} by admin {admin_id_check}. Expiry: {new_expiry:%Y-%m-%d}")
+        bot.reply_to(message, f"✅ Sub for `{sub_user_id}` by {days} days.\nNew expiry: {new_expiry:%Y-%m-%d}")
+        try: bot.send_message(sub_user_id, f"🎉 Sub activated/extended by {days} days! Expires: {new_expiry:%Y-%m-%d}.")
+        except Exception as e: logger.error(f"Failed to notify {sub_user_id} of new sub: {e}")
+    except ValueError as e:
+        bot.reply_to(message, f"⚠️ Invalid: {e}. Format: `ID days` or /cancel.")
+        msg = bot.send_message(message.chat.id, "💳 Enter User ID & days, or press Cancel.", reply_markup=cancel_markup())
+        bot.register_next_step_handler(msg, process_add_subscription_details)
+    except Exception as e: logger.error(f"Error processing add sub: {e}", exc_info=True); bot.reply_to(message, "Error.")
+
+def remove_subscription_init_callback(call):
+    bot.answer_callback_query(call.id)
+    msg = bot.send_message(call.message.chat.id, "💳 Enter User ID to remove sub.\nUse Cancel below to abort.", reply_markup=cancel_markup())
+    bot.register_next_step_handler(msg, process_remove_subscription_id)
+
+def process_remove_subscription_id(message):
+    admin_id_check = message.from_user.id
+    if admin_id_check not in admin_ids: bot.reply_to(message, "⚠️ Not authorized."); return
+    if message.text.lower() == '/cancel': bot.reply_to(message, "Sub removal cancelled."); return
+    try:
+        sub_user_id_remove = int(message.text.strip()) # Renamed
+        if sub_user_id_remove <= 0: raise ValueError("ID must be positive")
+        if sub_user_id_remove not in user_subscriptions:
+            bot.reply_to(message, f"⚠️ User `{sub_user_id_remove}` no active sub in memory."); return
+        remove_subscription_db(sub_user_id_remove) 
+        logger.warning(f"Sub removed for {sub_user_id_remove} by admin {admin_id_check}.")
+        bot.reply_to(message, f"✅ Sub for `{sub_user_id_remove}` removed.")
+        try: bot.send_message(sub_user_id_remove, "ℹ️ Your subscription removed by admin.")
+        except Exception as e: logger.error(f"Failed to notify {sub_user_id_remove} of sub removal: {e}")
+    except ValueError:
+        bot.reply_to(message, "⚠️ Invalid ID. Send numerical ID or /cancel.")
+        msg = bot.send_message(message.chat.id, "💳 Enter User ID to remove sub from, or press Cancel.", reply_markup=cancel_markup())
+        bot.register_next_step_handler(msg, process_remove_subscription_id)
+    except Exception as e: logger.error(f"Error processing remove sub: {e}", exc_info=True); bot.reply_to(message, "Error.")
+
+def check_subscription_init_callback(call):
+    bot.answer_callback_query(call.id)
+    msg = bot.send_message(call.message.chat.id, "💳 Enter User ID to check sub.\nUse Cancel below to abort.", reply_markup=cancel_markup())
+    bot.register_next_step_handler(msg, process_check_subscription_id)
+
+def process_check_subscription_id(message):
+    admin_id_check = message.from_user.id
+    if admin_id_check not in admin_ids: bot.reply_to(message, "⚠️ Not authorized."); return
+    if message.text.lower() == '/cancel': bot.reply_to(message, "Sub check cancelled."); return
+    try:
+        sub_user_id_check = int(message.text.strip()) # Renamed
+        if sub_user_id_check <= 0: raise ValueError("ID must be positive")
+        if sub_user_id_check in user_subscriptions:
+            expiry_dt = user_subscriptions[sub_user_id_check].get('expiry')
+            if expiry_dt:
+                if expiry_dt > datetime.now():
+                    days_left = (expiry_dt - datetime.now()).days
+                    bot.reply_to(message, f"✅ User `{sub_user_id_check}` active sub.\nExpires: {expiry_dt:%Y-%m-%d %H:%M:%S} ({days_left} days left).")
+                else:
+                    bot.reply_to(message, f"⚠️ User `{sub_user_id_check}` expired sub (On: {expiry_dt:%Y-%m-%d %H:%M:%S}).")
+                    remove_subscription_db(sub_user_id_check) # Clean up
+            else: bot.reply_to(message, f"⚠️ User `{sub_user_id_check}` in sub list, but expiry missing. Re-add if needed.")
+        else: bot.reply_to(message, f"ℹ️ User `{sub_user_id_check}` no active sub record.")
+    except ValueError:
+        bot.reply_to(message, "⚠️ Invalid ID. Send numerical ID or /cancel.")
+        msg = bot.send_message(message.chat.id, "💳 Enter User ID to check, or press Cancel.", reply_markup=cancel_markup())
+        bot.register_next_step_handler(msg, process_check_subscription_id)
+    except Exception as e: logger.error(f"Error processing check sub: {e}", exc_info=True); bot.reply_to(message, "Error.")
+
+# --- End Callback Query Handlers ---
+
+# ================= PACKAGE SHOP / MANUAL PAYMENTS / ADMIN HOSTING =================
+def init_shop_db():
+    with sqlite3.connect(DATABASE_PATH) as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS packages (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, price REAL NOT NULL, days INTEGER NOT NULL, bot_limit INTEGER NOT NULL, active INTEGER NOT NULL DEFAULT 1)")
+        conn.execute("CREATE TABLE IF NOT EXISTS payment_methods (method TEXT PRIMARY KEY, number TEXT NOT NULL)")
+        conn.execute("CREATE TABLE IF NOT EXISTS payment_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, package_id INTEGER NOT NULL, method TEXT NOT NULL, payment_ref TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, reviewed_by INTEGER, reviewed_at TEXT)")
+        conn.execute("CREATE TABLE IF NOT EXISTS package_subscriptions (user_id INTEGER PRIMARY KEY, package_id INTEGER NOT NULL, package_name TEXT NOT NULL, bot_limit INTEGER NOT NULL, expiry TEXT NOT NULL)")
+        conn.execute("CREATE TABLE IF NOT EXISTS package_access_revoked (user_id INTEGER PRIMARY KEY, revoked_at TEXT NOT NULL, revoked_by INTEGER NOT NULL)")
+        count = conn.execute("SELECT COUNT(*) FROM packages").fetchone()[0]
+        if count == 0:
+            conn.executemany("INSERT INTO packages(name,price,days,bot_limit,active) VALUES(?,?,?,?,1)", [
+                ("Basic • 1 Bot", 100, 30, 1),
+                ("Basic • 2 Bots", 150, 30, 2),
+            ])
+
+init_shop_db()
+
+def active_package_for_user(user_id):
+    try:
+        with sqlite3.connect(DATABASE_PATH) as conn:
+            row=conn.execute("SELECT package_name, bot_limit, expiry FROM package_subscriptions WHERE user_id=?",(user_id,)).fetchone()
+        if row and datetime.fromisoformat(row[2]) > datetime.now(): return {"name":row[0],"bot_limit":row[1],"expiry":row[2]}
+    except Exception: pass
+    return None
+
+def shop_markup():
+    m=types.InlineKeyboardMarkup(row_width=2)
+    with sqlite3.connect(DATABASE_PATH) as conn: rows=conn.execute("SELECT id,name,price,days,bot_limit FROM packages WHERE active=1 ORDER BY price").fetchall()
+    for pid,name,price,days,lim in rows:
+        m.add(types.InlineKeyboardButton(f"{name} • ৳{price:g}",callback_data=f"pkg_{pid}"))
+    m.add(types.InlineKeyboardButton("❌ Cancel",callback_data="cancel_action"))
+    m.add(types.InlineKeyboardButton("🔙 Main Menu",callback_data="back_to_main"))
+    return m
+
+def show_packages(chat_id):
+    with sqlite3.connect(DATABASE_PATH) as conn:
+        rows=conn.execute("SELECT id,name,price,days,bot_limit FROM packages WHERE active=1 ORDER BY price").fetchall()
+        methods=conn.execute("SELECT method,number FROM payment_methods ORDER BY method").fetchall()
+    if not rows:
+        bot.send_message(chat_id,"🛒 এখনো কোনো প্যাকেজ যোগ করা হয়নি।", reply_markup=cancel_markup())
+        return
+    lines=["🛒 Available Packages\n"]
+    for pid,name,price,days,lim in rows: lines.append(f"📦 {name}\n💰 দাম: ৳{price:g}\n📅 মেয়াদ: {days} দিন\n🤖 বট: {lim} টি\n")
+    lines.append("\nপ্যাকেজ কিনতে নিচের বাটনে চাপ দিন। পেমেন্টের পর Transaction ID/রেফারেন্স পাঠাতে হবে; Admin যাচাই করে চালু করবেন।")
+    bot.send_message(chat_id,"\n".join(lines),reply_markup=shop_markup())
+
+def show_package_history(chat_id):
+    """Show a neatly formatted package summary and all approved purchases."""
+    user_id = chat_id  # In a private bot chat, chat_id is the Telegram user ID.
+    now = datetime.now()
+    try:
+        with sqlite3.connect(DATABASE_PATH) as conn:
+            current = conn.execute(
+                "SELECT package_name, bot_limit, expiry FROM package_subscriptions WHERE user_id=?",
+                (user_id,)
+            ).fetchone()
+            total_purchases = conn.execute(
+                "SELECT COUNT(*) FROM payment_requests WHERE user_id=? AND status='approved'",
+                (user_id,)
+            ).fetchone()[0]
+            latest_payment = conn.execute(
+                "SELECT method, payment_ref FROM payment_requests WHERE user_id=? AND status='approved' ORDER BY id DESC LIMIT 1",
+                (user_id,)
+            ).fetchone()
+            history = conn.execute(
+                """SELECT COALESCE(p.name, 'প্যাকেজ'), p.days, p.bot_limit,
+                          r.created_at, r.method, r.payment_ref
+                   FROM payment_requests r
+                   LEFT JOIN packages p ON p.id = r.package_id
+                   WHERE r.user_id=? AND r.status='approved'
+                   ORDER BY r.id DESC""",
+                (user_id,)
+            ).fetchall()
+
+        def safe(value):
+            return str(value if value not in (None, '') else 'তথ্য নেই').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+        def fmt_date(value):
+            try:
+                return datetime.fromisoformat(str(value)).strftime("%d-%m-%Y %I:%M %p")
+            except (TypeError, ValueError):
+                return safe(value)
+
+        lines = ["✨ <b>আপনার প্যাকেজ ড্যাশবোর্ড</b>", "━━━━━━━━━━━━━━━━━━"]
+        if current:
+            package_name, bot_limit, expiry_text = current
+            lines.append(f"[1] 📦 <b>প্যাকেজ:</b> {safe(package_name)}")
+        else:
+            lines.append("[1] 📦 <b>প্যাকেজ:</b> বর্তমানে কোনো প্যাকেজ চালু নেই")
+            bot_limit, expiry_text = None, None
+
+        lines.append(f"[2] 🧾 <b>মোট প্যাকেজ:</b> {total_purchases} টি")
+        lines.append(f"[3] 🤖 <b>কয়টি বট/ফাইল:</b> {bot_limit if bot_limit is not None else '—'} টি")
+
+        if expiry_text:
+            try:
+                expiry = datetime.fromisoformat(str(expiry_text))
+                remaining_seconds = max(0, int((expiry - now).total_seconds()))
+                days, rem = divmod(remaining_seconds, 86400)
+                hours, rem = divmod(rem, 3600)
+                minutes, _ = divmod(rem, 60)
+                remaining_label = f"{days} দিন, {hours} ঘণ্টা, {minutes} মিনিট"
+                if remaining_seconds == 0:
+                    remaining_label += " (মেয়াদ শেষ)"
+                lines.append(f"[4] ⏳ <b>মেয়াদ বাকি:</b> {remaining_label}")
+                lines.append(f"[5] 📅 <b>মেয়াদ শেষ:</b> {expiry:%d-%m-%Y %I:%M %p}")
+            except (TypeError, ValueError):
+                lines.extend(["[4] ⏳ <b>মেয়াদ বাকি:</b> তথ্য পাওয়া যায়নি", "[5] 📅 <b>মেয়াদ শেষ:</b> তথ্য পাওয়া যায়নি"])
+        else:
+            lines.extend(["[4] ⏳ <b>মেয়াদ বাকি:</b> —", "[5] 📅 <b>মেয়াদ শেষ:</b> —"])
+
+        if latest_payment:
+            method, payment_ref = latest_payment
+            lines.append(f"[6] 💳 <b>পেমেন্টের মাধ্যম:</b> {safe(method)}")
+            lines.append(f"[7] 🆔 <b>Transaction ID:</b> {safe(payment_ref)}")
+        else:
+            lines.extend(["[6] 💳 <b>পেমেন্টের মাধ্যম:</b> —", "[7] 🆔 <b>Transaction ID:</b> —"])
+
+        lines.extend(["━━━━━━━━━━━━━━━━━━", "📜 <b>প্যাকেজ কেনার ইতিহাস</b>"])
+        bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML")
+
+        if not history:
+            bot.send_message(chat_id, "এখনো কোনো অনুমোদিত প্যাকেজ কেনার ইতিহাস নেই।")
+            return
+
+        chunks = []
+        current_chunk = f"📜 <b>অনুমোদিত কেনাকাটা: {total_purchases} টি</b>\n"
+        for index, row in enumerate(history, 1):
+            name, package_days, package_bots, created_at, method, payment_ref = row
+            item = (
+                f"\n<b>#{index} • {safe(name)}</b>\n"
+                f"📅 মেয়াদ: {package_days if package_days is not None else '—'} দিন\n"
+                f"🤖 বট/ফাইল: {package_bots if package_bots is not None else '—'} টি\n"
+                f"🕒 কেনার তারিখ: {fmt_date(created_at)}\n"
+                f"💳 মাধ্যম: {safe(method)}\n"
+                f"🆔 Transaction ID: {safe(payment_ref)}\n"
+                "──────────────────\n"
+            )
+            if len(current_chunk) + len(item) > 3500:
+                chunks.append(current_chunk)
+                current_chunk = "📜 <b>প্যাকেজ কেনার ইতিহাস (চলমান)</b>\n"
+            current_chunk += item
+        if current_chunk.strip():
+            chunks.append(current_chunk)
+        for chunk in chunks:
+            bot.send_message(chat_id, chunk, parse_mode="HTML")
 
     except Exception as e:
-        return {"ok": False, "message": f"{p['name']} API Error: {e}"}
+        logger.error(f"Package history error for user {user_id}: {e}", exc_info=True)
+        bot.send_message(chat_id, "⚠️ প্যাকেজের তথ্য দেখাতে সমস্যা হয়েছে। পরে আবার চেষ্টা করুন।")
+def show_packages_callback(call):
+    bot.answer_callback_query(call.id)
+    show_packages(call.message.chat.id)
 
-    now = time.time()
-    if expires_ts is None:
-        expires_ts = now + NUMBER_TTL_SECONDS
-    num_id = secrets.token_hex(6)
-    range_str = str(raw_range).strip() or (f"{clean_rid}XXX" if clean_rid else "ANY")
-    rate_val = calculate_rate(country, "", user_dict.get("agent_email", ""))
-
-    entry = {
-        "id": num_id,
-        "panel": p["key"],
-        "panel_name": p["name"],
-        "range": range_str,
-        "full_number": full_num,
-        "national_number": nat_num,
-        "no_plus_number": no_plus,
-        "country": country,
-        "operator": operator,
-        "country_rate": rate_val,
-        "created_at": now,
-        "expires_at": expires_ts,
-        "otp_message": None,
-        "earned_amount": 0.0,
-    }
-
-    conn = get_db()
-    conn.execute("""
-        INSERT INTO user_numbers (
-            id, user_email, range_val, full_number, national_number, no_plus_number,
-            country, operator, country_rate, created_ts, expires_ts, otp_message, earned_amount, panel_key
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        num_id, user_dict["email"], range_str, entry["full_number"], entry["national_number"],
-        entry["no_plus_number"], country, entry["operator"], rate_val,
-        entry["created_at"], entry["expires_at"], None, 0.0, p["key"]
-    ))
-    conn.commit()
-    conn.close()
-    sync_user_number_to_firestore(num_id)
-
-    return {"ok": True, "item": entry}
-
-
-def _create_number_for_user(user_dict: dict, raw_range: str, panel_key: str = "master"):
-    mode = str(panel_key or "master").strip().lower()
-    if mode in ("", "master", "auto", "all"):
-        tried_errors = []
-        for pk in MASTER_API_CONFIG["panel_order"]:
-            p = PANELS.get(pk)
-            if not p or not get_panel_active_flag(pk) or not get_api_token(pk):
-                continue
-            res = _create_number_for_single_panel(user_dict, raw_range, pk)
-            if res.get("ok"):
-                res["matched_panel"] = pk
-                res["matched_panel_name"] = p["name"]
-                return res
-            tried_errors.append(f"{p['name']}: {res.get('message')}")
-        return {
-            "ok": False,
-            "message": " | ".join(tried_errors) if tried_errors else "No active panel with available number found for this range."
-        }
-    return _create_number_for_single_panel(user_dict, raw_range, panel_key)
-
-
-def _fetch_incoming_otps_for_panel(panel_key: str) -> list:
-    p = resolve_panel(panel_key)
-    if not get_panel_active_flag(p["key"]):
-        return []
-    api_token = get_api_token(p["key"])
-    if not api_token:
-        return []
-
-    otps = []
+def package_selected_callback(call):
     try:
-        if p["style"] == "sr1":
-            otp_ep = (p.get("extra_endpoints") or {}).get("success_otp") or "/success-otp"
-            r = requests.get(f"{p['base_url']}{otp_ep}", headers=upstream_headers(api_token, p["key"]), timeout=10)
-            raw_list = (r.json().get("data") or {}).get("otps") or []
-            for item in raw_list:
-                otps.append({
-                    "number": str(item.get("number") or ""),
-                    "message": str(item.get("message") or ""),
-                })
-        elif p["style"] == "yehub":
-            otp_ep = (p.get("extra_endpoints") or {}).get("success_otp") or "/user_numbers"
-            r = requests.get(f"{p['base_url']}{otp_ep}", headers=upstream_headers(api_token, p["key"]), timeout=10)
-            raw_list = r.json().get("logs") or []
-            for item in raw_list:
-                otps.append({
-                    "number": str(item.get("number") or ""),
-                    "message": str(item.get("full_message") or item.get("message") or ""),
-                })
-        elif p["style"] == "slvirtual":
-            otp_ep = (p.get("extra_endpoints") or {}).get("success_otp") or "/otp-monitor"
-            r = requests.get(f"{p['base_url']}{otp_ep}?limit=100", headers=upstream_headers(api_token, p["key"]), timeout=10)
-            raw_list = r.json().get("data") or []
-            for item in raw_list:
-                otps.append({
-                    "number": str(item.get("phoneNumber") or item.get("number") or ""),
-                    "message": str(item.get("fullSms") or item.get("message") or ""),
-                })
-        elif p["style"] == "zebrasms":
-            otp_ep = (p.get("extra_endpoints") or {}).get("success_otp") or "/publicapi/getupdate"
-            r = requests.get(f"{p['base_url']}{otp_ep}", headers=upstream_headers(api_token, p["key"]), timeout=10)
-            res_json = r.json()
-            if (res_json.get("meta") or {}).get("code") == 0:
-                raw_list = ((res_json.get("data") or {}).get("rows")) or []
-                for item in raw_list:
-                    if isinstance(item, dict):
-                        otps.append({
-                            "number": str(item.get("number") or ""),
-                            "message": str(item.get("message") or ""),
-                            "sender": str(item.get("sender") or ""),
-                        })
-        elif p["style"] == "zenex":
-            otp_ep = (p.get("extra_endpoints") or {}).get("success_otp") or p.get("otp_endpoint") or "/v1/numsuccess/info"
-            r = requests.get(f"{p['base_url']}{otp_ep}", headers=upstream_headers(api_token, p["key"]), timeout=10)
-            res_json = r.json()
-            data_obj = res_json.get("data") if isinstance(res_json.get("data"), dict) else {}
-            raw_list = data_obj.get("otps") or data_obj.get("rows") or res_json.get("otps") or []
-            for item in raw_list:
-                if isinstance(item, dict):
-                    msg_val = item.get("otp") or item.get("message") or item.get("sms") or ""
-                    otps.append({
-                        "number": str(item.get("number") or item.get("full_number") or ""),
-                        "message": str(msg_val),
-                        "sender": str(item.get("service") or item.get("sender") or ""),
-                    })
-    except Exception:
-        return []
-    return otps
+        pid=int(call.data.split('_',1)[1])
+        with sqlite3.connect(DATABASE_PATH) as conn: row=conn.execute("SELECT name,price,days,bot_limit FROM packages WHERE id=? AND active=1",(pid,)).fetchone()
+        if not row: bot.answer_callback_query(call.id,"প্যাকেজ পাওয়া যায়নি",show_alert=True); return
+        name,price,days,lim=row
+        with sqlite3.connect(DATABASE_PATH) as conn:
+            configured = dict(conn.execute("SELECT method,number FROM payment_methods").fetchall())
+        # Show only payment methods enabled by the admin in the database.
+        icons = {"bkash": "💗", "nagad": "🟠", "rocket": "🟣", "binance": "🟡"}
+        methods = list(configured.items())
+        m=types.InlineKeyboardMarkup(row_width=2)
+        for method,number in methods:
+            icon = icons.get(method.lower(), "💳")
+            button_label = f"{icon} {method} • {number}" if number else f"{icon} {method} • সেটআপ বাকি"
+            m.add(types.InlineKeyboardButton(button_label[:60],callback_data=f"paymethod_{pid}_{method}"))
+        m.add(types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_action"))
+        if not methods:
+            bot.answer_callback_query(call.id, "এখনো কোনো পেমেন্ট মাধ্যম যোগ করা হয়নি।", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id,f"📦 {name} | ৳{price:g} | {days} দিন | {lim} বট\\nপেমেন্ট মাধ্যম বাছাই করুন:",reply_markup=m)
+    except Exception as e: logger.exception("package selection failed: %s",e)
 
+def payment_method_selected_callback(call):
+    try:
+        _,pid,method=call.data.split('_',2); pid=int(pid)
+        with sqlite3.connect(DATABASE_PATH) as conn:
+            row=conn.execute("SELECT name,price FROM packages WHERE id=? AND active=1",(pid,)).fetchone()
+            number=conn.execute("SELECT number FROM payment_methods WHERE method=?",(method,)).fetchone()
+        if not row:
+            bot.answer_callback_query(call.id,"প্যাকেজটি পাওয়া যায়নি।",show_alert=True); return
+        if not number or not number[0]:
+            bot.answer_callback_query(call.id,f"{method} এখনো সেটআপ করা হয়নি। Admin-কে পেমেন্ট নম্বর/ID যোগ করতে বলুন।",show_alert=True); return
+        bot.answer_callback_query(call.id)
+        msg=bot.send_message(call.message.chat.id,f"{method} নম্বরে ৳{row[1]:g} পেমেন্ট করুন: {number[0]}\nএরপর Transaction ID/রেফারেন্স লিখে পাঠান।", reply_markup=cancel_markup())
+        bot.register_next_step_handler(msg,save_payment_reference,pid,method)
+    except Exception as e: logger.exception("payment method selection failed: %s",e)
 
-def _fetch_user_numbers_and_sync_otp(user_dict: dict, panel_key: str = None):
-    now = time.time()
-    conn = get_db()
-    if panel_key:
-        p = resolve_panel(panel_key)
-        rows = conn.execute(
-            "SELECT * FROM user_numbers WHERE user_email = ? AND panel_key = ? ORDER BY created_ts DESC",
-            (user_dict["email"], p["key"])
-        ).fetchall()
+def save_payment_reference(message,pid,method):
+    if not message.text or message.text.strip().lower()=="/cancel": bot.reply_to(message,"পেমেন্ট রিকোয়েস্ট বাতিল করা হয়েছে।"); return
+    ref=message.text.strip()[:200]
+    with sqlite3.connect(DATABASE_PATH) as conn:
+        cur=conn.execute("INSERT INTO payment_requests(user_id,package_id,method,payment_ref,status,created_at) VALUES(?,?,?,?,?,?)",(message.from_user.id,pid,method,ref,'pending',datetime.now().isoformat()))
+        rid=cur.lastrowid
+        pkg=conn.execute("SELECT name,price,days,bot_limit FROM packages WHERE id=?",(pid,)).fetchone()
+    bot.reply_to(message,"✅ পেমেন্ট রিকোয়েস্ট জমা হয়েছে। Admin যাচাই করে Approve করলে প্যাকেজ চালু হবে।")
+    if pkg:
+        uname = ('@' + message.from_user.username) if message.from_user.username else 'Username নেই'
+        text=f"🧾 New payment request #{rid}\n👤 Name: {message.from_user.first_name or 'User'}\n✳️ Username: {uname}\n🆔 User ID: {message.from_user.id}\n📦 Package: {pkg[0]} | ৳{pkg[1]:g} | {pkg[2]} দিন | {pkg[3]} bots\n💳 Method: {method}\n🧾 Reference: {ref}"
+        kb=types.InlineKeyboardMarkup(row_width=2).row(types.InlineKeyboardButton("✅ Approve",callback_data=f"payapprove_{rid}"),types.InlineKeyboardButton("❌ Reject",callback_data=f"paycancel_{rid}"))
+        kb.add(types.InlineKeyboardButton("Close", callback_data="cancel_action"))
+        for aid in admin_ids:
+            try: bot.send_message(aid,text,reply_markup=kb)
+            except Exception: pass
+
+def show_pending_payments(call):
+    bot.answer_callback_query(call.id)
+    with sqlite3.connect(DATABASE_PATH) as conn:
+        rows=conn.execute("SELECT id,user_id,package_id,method,payment_ref FROM payment_requests WHERE status='pending' ORDER BY id DESC LIMIT 30").fetchall()
+    if not rows: bot.send_message(call.message.chat.id,"📭 Pending payment নেই।"); return
+    for rid,uid,pid,method,ref in rows:
+        with sqlite3.connect(DATABASE_PATH) as conn: pkg=conn.execute("SELECT name,price FROM packages WHERE id=?",(pid,)).fetchone()
+        title=pkg[0] if pkg else "Deleted package"; price=pkg[1] if pkg else 0
+        kb=types.InlineKeyboardMarkup(row_width=2).row(types.InlineKeyboardButton("✅ Approve",callback_data=f"payapprove_{rid}"),types.InlineKeyboardButton("❌ Reject",callback_data=f"paycancel_{rid}"))
+        kb.add(types.InlineKeyboardButton("Close", callback_data="cancel_action"))
+        bot.send_message(call.message.chat.id,f"#{rid} | User ID: {uid} | {title} ৳{price:g} | {method} | Ref: {ref}",reply_markup=kb)
+
+def admin_payment_decision(call,approve):
+    if call.from_user.id not in admin_ids: bot.answer_callback_query(call.id,"Admin only",show_alert=True); return
+    rid=int(call.data.rsplit('_',1)[1])
+    with sqlite3.connect(DATABASE_PATH) as conn:
+        row=conn.execute("SELECT user_id,package_id,status FROM payment_requests WHERE id=?",(rid,)).fetchone()
+        if not row or row[2]!='pending': bot.answer_callback_query(call.id,"Already processed / not found",show_alert=True); return
+        uid,pid,_=row
+        if approve:
+            pkg=conn.execute("SELECT name,days,bot_limit FROM packages WHERE id=? AND active=1",(pid,)).fetchone()
+            if not pkg: bot.answer_callback_query(call.id,"Package missing",show_alert=True); return
+            name,days,lim=pkg
+            old=conn.execute("SELECT expiry FROM package_subscriptions WHERE user_id=?",(uid,)).fetchone()
+            start=datetime.now()
+            if old:
+                try:
+                    old_exp=datetime.fromisoformat(old[0])
+                    if old_exp>start: start=old_exp
+                except Exception: pass
+            expiry=start+timedelta(days=days)
+            conn.execute("INSERT OR REPLACE INTO package_subscriptions(user_id,package_id,package_name,bot_limit,expiry) VALUES(?,?,?,?,?)",(uid,pid,name,lim,expiry.isoformat()))
+            conn.execute("DELETE FROM package_access_revoked WHERE user_id=?", (uid,))
+            conn.execute("UPDATE payment_requests SET status='approved',reviewed_by=?,reviewed_at=? WHERE id=?",(call.from_user.id,datetime.now().isoformat(),rid))
+        else:
+            conn.execute("UPDATE payment_requests SET status='cancelled',reviewed_by=?,reviewed_at=? WHERE id=?",(call.from_user.id,datetime.now().isoformat(),rid))
+    bot.answer_callback_query(call.id,"Approved" if approve else "Cancelled")
+    try:
+        if approve: bot.send_message(uid,f"🎉 Payment approved!\n📦 Package: {name}\n🤖 Bot limit: {lim}\n📅 Expiry: {expiry:%Y-%m-%d %H:%M}")
+        else: bot.send_message(uid,"❌ আপনার পেমেন্ট রিকোয়েস্ট Admin বাতিল করেছে। প্রয়োজনে Owner-এর সাথে যোগাযোগ করুন।")
+    except Exception: pass
+    try: bot.edit_message_reply_markup(call.message.chat.id,call.message.message_id,reply_markup=None)
+    except Exception: pass
+
+def create_admin_panel():
+    m=types.InlineKeyboardMarkup(row_width=2)
+    m.row(types.InlineKeyboardButton("📦 Manage Packages",callback_data="packages_admin"),types.InlineKeyboardButton("💳 Pending Payments",callback_data="payments_admin"))
+    m.row(types.InlineKeyboardButton("💳 Payment Methods Manage",callback_data="methods_admin"),types.InlineKeyboardButton("👥 Users & Bots",callback_data="users_admin"))
+    m.row(types.InlineKeyboardButton("🗑️ Delete User Package",callback_data="adminpkg_delete_user"))
+    m.row(types.InlineKeyboardButton("➕ Add Admin",callback_data="add_admin"),types.InlineKeyboardButton("➖ Remove Admin",callback_data="remove_admin"))
+    m.add(types.InlineKeyboardButton("📋 List Admins",callback_data="list_admins"))
+    m.add(types.InlineKeyboardButton("❌ Cancel",callback_data="cancel_action"),types.InlineKeyboardButton("🔙 Main Menu",callback_data="back_to_main"))
+    return m
+
+def admin_packages_menu(call):
+    bot.answer_callback_query(call.id)
+    with sqlite3.connect(DATABASE_PATH) as conn: rows=conn.execute("SELECT id,name,price,days,bot_limit FROM packages WHERE active=1 ORDER BY id").fetchall()
+    m=types.InlineKeyboardMarkup(row_width=1)
+    for pid,name,price,days,lim in rows: m.add(types.InlineKeyboardButton(f"🗑 {name} | ৳{price:g} | {days}d | {lim} bots",callback_data=f"pkgdel_{pid}"))
+    m.add(types.InlineKeyboardButton("➕ Add Package",callback_data="package_add"))
+    m.add(types.InlineKeyboardButton("❌ Cancel",callback_data="cancel_action"))
+    bot.send_message(call.message.chat.id,"📦 Packages (tap to deactivate):",reply_markup=m)
+
+def begin_add_package(call):
+    bot.answer_callback_query(call.id)
+    msg=bot.send_message(call.message.chat.id,"নতুন প্যাকেজ দিন এই ফরম্যাটে:\nName | Price | Days | Bot Limit\nউদাহরণ: Basic | 100 | 30 | 2", reply_markup=cancel_markup())
+    bot.register_next_step_handler(msg,save_new_package)
+
+def save_new_package(message):
+    if message.from_user.id not in admin_ids: return
+    if not message.text or message.text.strip().lower()=="/cancel": return
+    try:
+        name,price,days,lim=[x.strip() for x in message.text.split('|')]
+        price=float(price); days=int(days); lim=int(lim)
+        if not name or price<=0 or days<=0 or lim<=0: raise ValueError()
+        with sqlite3.connect(DATABASE_PATH) as conn: conn.execute("INSERT INTO packages(name,price,days,bot_limit) VALUES(?,?,?,?)",(name[:60],price,days,lim))
+        bot.reply_to(message,"✅ প্যাকেজ যোগ হয়েছে। এখন Buy Package-এ দেখাবে।")
+    except Exception: bot.reply_to(message,"❌ ভুল ফরম্যাট। আবার দিন: Name | Price | Days | Bot Limit")
+
+def delete_package_callback(call):
+    pid=int(call.data.split('_',1)[1])
+    with sqlite3.connect(DATABASE_PATH) as conn: conn.execute("UPDATE packages SET active=0 WHERE id=?",(pid,))
+    bot.answer_callback_query(call.id,"Package deactivated")
+    try: bot.edit_message_text("প্যাকেজটি বন্ধ করা হয়েছে।",call.message.chat.id,call.message.message_id)
+    except Exception: pass
+
+def payment_methods_admin_menu(call):
+    bot.answer_callback_query(call.id)
+    with sqlite3.connect(DATABASE_PATH) as conn:
+        rows = conn.execute("SELECT method,number FROM payment_methods ORDER BY method").fetchall()
+    m = types.InlineKeyboardMarkup(row_width=1)
+    m.add(types.InlineKeyboardButton("➕ Add Payment Method", callback_data="payment_add_method"))
+    m.add(types.InlineKeyboardButton("🔢 Set / Change Number or Wallet ID", callback_data="payment_set_number"))
+    m.add(types.InlineKeyboardButton("🗑 Delete Payment Method", callback_data="payment_delete_method"))
+    m.add(types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_action"))
+    if rows:
+        summary = "\n".join(f"• {name}: {number or 'নম্বর/ID সেট করা হয়নি'}" for name, number in rows)
     else:
-        rows = conn.execute(
-            "SELECT * FROM user_numbers WHERE user_email = ? ORDER BY created_ts DESC",
-            (user_dict["email"],)
-        ).fetchall()
+        summary = "এখনো কোনো পেমেন্ট মাধ্যম যোগ করা হয়নি।"
+    bot.send_message(call.message.chat.id, "💳 Payment Methods Admin\n\n" + summary, reply_markup=m)
 
-    items = [dict(r) for r in rows]
-    synced_num_ids = []
-    synced_log_ids = []
+def begin_add_payment_method(call):
+    bot.answer_callback_query(call.id)
+    msg = bot.send_message(call.message.chat.id, "নতুন পেমেন্ট মেথডের নাম লিখুন (যেমন bKash, Nagad, Rocket, Binance)।\nUse Cancel below to abort.", reply_markup=cancel_markup())
+    bot.register_next_step_handler(msg, save_new_payment_method)
 
-    active_items = [it for it in items if it["expires_ts"] > now and not it["otp_message"]]
-    if active_items:
-        otps_by_panel = {}
-        for it in active_items:
-            pk = str(it.get("panel_key") or "1")
-            if pk not in otps_by_panel:
-                otps_by_panel[pk] = _fetch_incoming_otps_for_panel(pk)
+def save_new_payment_method(message):
+    if message.from_user.id not in admin_ids: return
+    if not message.text or message.text.strip().lower() == "/cancel":
+        bot.reply_to(message, "বাতিল করা হয়েছে।"); return
+    method = message.text.strip()[:30]
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 .()-]{0,29}", method):
+        bot.reply_to(message, "❌ নামটি ঠিক নয়। ইংরেজি অক্ষর/সংখ্যা ও সাধারণ স্পেস ব্যবহার করুন।"); return
+    with sqlite3.connect(DATABASE_PATH) as conn:
+        exists = conn.execute("SELECT 1 FROM payment_methods WHERE lower(method)=lower(?)", (method,)).fetchone()
+        if exists:
+            bot.reply_to(message, "এই মেথড আগে থেকেই আছে। Set / Change Number অপশন ব্যবহার করুন।"); return
+        conn.execute("INSERT INTO payment_methods(method,number) VALUES(?, '')", (method,))
+    bot.reply_to(message, f"✅ {method} যোগ হয়েছে। এখন Payment Methods Manage → Set / Change Number থেকে নম্বর/Wallet ID দিন।")
 
-            for otp in otps_by_panel[pk]:
-                num_clean = str(it["no_plus_number"] or "").lstrip("+")
-                otp_num = str(otp.get("number") or "").lstrip("+")
-                if not num_clean or not otp_num:
-                    continue
-                if otp_num.endswith(num_clean) or num_clean.endswith(otp_num):
-                    msg_text = otp.get("message", "")
-                    sender_name = str(otp.get("sender") or "").strip()
-                    service_sid = sender_name or detect_service_from_message(msg_text)
-                    rate_used = calculate_rate(it["country"], service_sid, user_dict.get("agent_email", ""))
-                    now_utc = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+def begin_set_payment_number(call):
+    bot.answer_callback_query(call.id)
+    with sqlite3.connect(DATABASE_PATH) as conn:
+        rows = conn.execute("SELECT method,number FROM payment_methods ORDER BY method").fetchall()
+    if not rows:
+        bot.send_message(call.message.chat.id, "আগে ➕ Add Payment Method দিয়ে একটি মেথড যোগ করুন।"); return
+    m = types.InlineKeyboardMarkup(row_width=1)
+    for method,number in rows:
+        m.add(types.InlineKeyboardButton(f"🔢 {method} — {number or 'নম্বর সেট নেই'}"[:60], callback_data=f"pmset_{method}"))
+    m.add(types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_action"))
+    bot.send_message(call.message.chat.id, "যে পেমেন্ট মেথডের নম্বর/Wallet ID সেট বা পরিবর্তন করবেন সেটি বাছুন:", reply_markup=m)
 
-                    it["otp_message"] = msg_text
-                    it["earned_amount"] = rate_used
+def select_payment_number_method(call):
+    bot.answer_callback_query(call.id)
+    method = call.data[len("pmset_"):]
+    msg = bot.send_message(call.message.chat.id, f"{method}-এর নতুন মোবাইল নম্বর / Wallet ID লিখুন।\nUse Cancel below to abort.", reply_markup=cancel_markup())
+    bot.register_next_step_handler(msg, save_payment_number, method)
 
-                    conn.execute(
-                        "UPDATE user_numbers SET otp_message = ?, earned_amount = ? WHERE id = ?",
-                        (msg_text, rate_used, it["id"])
-                    )
-                    conn.execute(
-                        """UPDATE users
-                           SET balance = ROUND(balance + ?, 4),
-                               lifetime_earning = ROUND(lifetime_earning + ?, 4),
-                               otp_count = otp_count + 1
-                           WHERE email = ?""",
-                        (rate_used, rate_used, user_dict["email"])
-                    )
-                    cur_log = conn.execute(
-                        """INSERT INTO otp_logs (
-                            created_at, created_ts, user_email, agent_email,
-                            number_val, country, service, rate, message, panel_key
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                        (
-                            now_utc, now, user_dict["email"], user_dict["agent_email"],
-                            it["full_number"], it["country"], service_sid, rate_used, msg_text, pk
-                        )
-                    )
-                    synced_num_ids.append(it["id"])
-                    if cur_log.lastrowid:
-                        synced_log_ids.append(cur_log.lastrowid)
-                    conn.commit()
-                    break
+def save_payment_number(message, method):
+    if message.from_user.id not in admin_ids: return
+    if not message.text or message.text.strip().lower() == "/cancel":
+        bot.reply_to(message, "বাতিল করা হয়েছে।"); return
+    number = message.text.strip()[:100]
+    if not re.fullmatch(r"[A-Za-z0-9@._:+/ -]{3,100}", number):
+        bot.reply_to(message, "❌ নম্বর/ID ফরম্যাট ঠিক নয়। আবার চেষ্টা করুন।"); return
+    with sqlite3.connect(DATABASE_PATH) as conn:
+        cur = conn.execute("UPDATE payment_methods SET number=? WHERE method=?", (number, method))
+        if cur.rowcount == 0:
+            bot.reply_to(message, "❌ পেমেন্ট মেথডটি পাওয়া যায়নি।"); return
+    bot.reply_to(message, f"✅ {method}-এর নম্বর/Wallet ID আপডেট হয়েছে।")
 
-    fresh_user = get_user_dict(user_dict["email"])
-    current_balance = float(fresh_user["balance"]) if fresh_user else float(user_dict["balance"])
-    conn.close()
+def begin_delete_payment_method(call):
+    bot.answer_callback_query(call.id)
+    with sqlite3.connect(DATABASE_PATH) as conn:
+        rows = conn.execute("SELECT method,number FROM payment_methods ORDER BY method").fetchall()
+    if not rows:
+        bot.send_message(call.message.chat.id, "ডিলিট করার মতো কোনো পেমেন্ট মেথড নেই।"); return
+    m = types.InlineKeyboardMarkup(row_width=1)
+    for method,number in rows:
+        m.add(types.InlineKeyboardButton(f"🗑 {method} — {number or 'নম্বর সেট নেই'}"[:60], callback_data=f"pmdel_{method}"))
+    m.add(types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_action"))
+    bot.send_message(call.message.chat.id, "যে পেমেন্ট মেথড ডিলিট করবেন সেটি বাছুন:", reply_markup=m)
 
-    if synced_num_ids or synced_log_ids:
-        sync_user_to_firestore(user_dict["email"])
-        for nid in synced_num_ids:
-            sync_user_number_to_firestore(nid)
-        for lid in synced_log_ids:
-            sync_otp_log_to_firestore(lid)
+def delete_payment_method_callback(call):
+    method = call.data[len("pmdel_"):]
+    with sqlite3.connect(DATABASE_PATH) as conn:
+        conn.execute("DELETE FROM payment_methods WHERE method=?", (method,))
+    bot.answer_callback_query(call.id, f"{method} ডিলিট হয়েছে")
+    try: bot.edit_message_text(f"🗑 {method} পেমেন্ট মেথড ডিলিট করা হয়েছে।", call.message.chat.id, call.message.message_id)
+    except Exception: pass
 
-    formatted = []
-    for it in items:
-        remaining = max(0, int(it["expires_ts"] - now))
-        pk = str(it.get("panel_key") or "1")
-        p_info = resolve_panel(pk)
-        formatted.append({
-            "id": it["id"],
-            "panel": pk,
-            "panel_name": p_info["name"],
-            "range": it["range_val"],
-            "full_number": it["full_number"],
-            "national_number": it["national_number"],
-            "no_plus_number": it["no_plus_number"],
-            "country": it["country"],
-            "operator": it["operator"],
-            "country_rate": it["country_rate"],
-            "created_at": it["created_ts"],
-            "expires_at": it["expires_ts"],
-            "otp_message": it["otp_message"],
-            "earned_amount": it["earned_amount"],
-            "remaining_seconds": remaining,
-            "expired": remaining == 0,
-            "balance": current_balance,
-        })
+# Backward-compatible bulk update handler, retained for any older callback references.
+def begin_set_payment_methods(call):
+    bot.answer_callback_query(call.id)
+    msg=bot.send_message(call.message.chat.id,"প্রতি লাইনে একটি করে লিখুন: bKash: 01XXXXXXXXX\nNagad: 01XXXXXXXXX\nRocket: 01XXXXXXXXX\nBinance: WalletID\nএই তালিকা বর্তমান মেথডগুলো প্রতিস্থাপন করবে।", reply_markup=cancel_markup())
+    bot.register_next_step_handler(msg,save_payment_methods)
 
-    return formatted, current_balance
+def save_payment_methods(message):
+    if message.from_user.id not in admin_ids: return
+    if not message.text or message.text.strip().lower()=="/cancel": return
+    entries=[]
+    canonical = {name.lower(): name for name in ("bKash", "Nagad", "Rocket", "Binance")}
+    for line in message.text.splitlines():
+        if ':' not in line: continue
+        method,number=line.split(':',1); method=method.strip(); number=number.strip()
+        method = canonical.get(method.lower(), method)
+        if method and re.fullmatch(r'[A-Za-z0-9@._:+/ -]{3,100}',number): entries.append((method[:30],number))
+    if not entries: bot.reply_to(message,"❌ কোনো বৈধ নম্বর পাওয়া যায়নি।"); return
+    with sqlite3.connect(DATABASE_PATH) as conn:
+        conn.execute("DELETE FROM payment_methods")
+        conn.executemany("INSERT INTO payment_methods(method,number) VALUES(?,?)",entries)
+    bot.reply_to(message,"✅ Payment methods updated: "+", ".join(x[0] for x in entries))
 
+def show_hosted_users(call):
+    bot.answer_callback_query(call.id)
+    with sqlite3.connect(DATABASE_PATH) as conn:
+        rows=conn.execute("SELECT u.user_id,COALESCE(p.username,''),COALESCE(p.first_name,'User'),COUNT(f.file_name) FROM active_users u LEFT JOIN user_profiles p ON p.user_id=u.user_id LEFT JOIN user_files f ON f.user_id=u.user_id GROUP BY u.user_id,p.username,p.first_name ORDER BY COALESCE(p.last_seen,'') DESC LIMIT 50").fetchall()
+    m=types.InlineKeyboardMarkup(row_width=1)
+    for uid,username,first_name,count in rows:
+        label = '@'+username if username else first_name
+        m.add(types.InlineKeyboardButton(f"👤 {label} | ID {uid} | {count} file(s)",callback_data=f"adminuser_{uid}"))
+    m.add(types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_action"))
+    bot.send_message(call.message.chat.id,"👥 Users & uploaded files (latest 50):",reply_markup=m)
 
-# ---------------- BACKGROUND OTP LISTENER ----------------
+def show_user_bots_callback(call):
+    uid=int(call.data.split('_',1)[1])
+    with sqlite3.connect(DATABASE_PATH) as conn:
+        rows=conn.execute("SELECT file_name,file_type FROM user_files WHERE user_id=? ORDER BY file_name",(uid,)).fetchall()
+        profile=conn.execute("SELECT username,first_name FROM user_profiles WHERE user_id=?",(uid,)).fetchone()
+        package=conn.execute("SELECT package_name,expiry FROM package_subscriptions WHERE user_id=?",(uid,)).fetchone()
+    username, first_name = profile if profile else ('', 'User')
+    display_name = ('@'+username) if username else (first_name or 'User')
+    package_label = package[0] if package else 'No active package'
+    m=types.InlineKeyboardMarkup(row_width=1)
+    for name,typ in rows:
+        running=is_bot_running(uid,name)
+        m.add(types.InlineKeyboardButton(f"{'🟢' if running else '🔴'} {name} ({typ}) • Manage/Delete",callback_data=f"file_{uid}_{name}"))
+    m.add(types.InlineKeyboardButton("🗑️ Delete User Package", callback_data=f"userpkgdel_{uid}"))
+    m.add(types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_action"))
+    m.add(types.InlineKeyboardButton("🔙 Users",callback_data="users_admin"))
+    bot.send_message(call.message.chat.id,
+        f"👤 User: {display_name}\n🆔 User ID: <code>{uid}</code>\n📦 Package: {package_label}\n🤖 Bots/Files: {len(rows)}",
+        reply_markup=m, parse_mode="HTML")
 
-_BG_OTP_STARTED = False
-_BG_OTP_LOCK = threading.Lock()
+# --- Admin: revoke a user's package access ---
+def begin_delete_user_package(call):
+    bot.answer_callback_query(call.id)
+    msg = bot.send_message(call.message.chat.id,
+        "🗑️ Send the user's Telegram ID to delete their package.\n\n❌ Use Cancel below to stop.",
+        reply_markup=cancel_markup())
+    bot.register_next_step_handler(msg, process_delete_user_package_id)
 
+def process_delete_user_package_id(message):
+    if message.from_user.id not in admin_ids:
+        return
+    if not message.text or message.text.strip().lower() in ('/cancel', 'cancel'):
+        bot.reply_to(message, "❌ Cancelled.")
+        return
+    try:
+        uid = int(message.text.strip())
+        if uid <= 0:
+            raise ValueError
+    except ValueError:
+        msg = bot.reply_to(message, "⚠️ Invalid User ID. Send a numeric Telegram ID or press Cancel.", reply_markup=cancel_markup())
+        bot.register_next_step_handler(msg, process_delete_user_package_id)
+        return
+    with sqlite3.connect(DATABASE_PATH) as conn:
+        profile = conn.execute("SELECT username, first_name FROM user_profiles WHERE user_id=?", (uid,)).fetchone()
+        package = conn.execute("SELECT package_name, bot_limit, expiry FROM package_subscriptions WHERE user_id=?", (uid,)).fetchone()
+    if not profile and not package:
+        bot.reply_to(message, f"⚠️ User {uid} was not found in the bot database.")
+        return
+    username, first_name = profile if profile else ('', 'User')
+    display_name = ('@'+username) if username else (first_name or 'User')
+    package_text = package[0] if package else 'No active package'
+    expiry_text = package[2] if package else '—'
+    m = types.InlineKeyboardMarkup(row_width=2)
+    m.row(types.InlineKeyboardButton("🗑️ Confirm Delete", callback_data=f"userpkgconfirm_{uid}"),
+          types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_action"))
+    bot.send_message(message.chat.id,
+        f"⚠️ <b>Confirm package deletion</b>\n\n👤 User: {display_name}\n🆔 User ID: <code>{uid}</code>\n📦 Package: {package_text}\n📅 Expiry: {expiry_text}\n\nThe user will not be able to upload files until a new package payment is approved. Purchase history will be kept.",
+        parse_mode="HTML", reply_markup=m)
 
-def _background_otp_listener_loop(interval_seconds: int = 5):
+def confirm_delete_user_package(call):
+    uid = int(call.data.split('_', 1)[1])
+    with sqlite3.connect(DATABASE_PATH) as conn:
+        profile = conn.execute("SELECT username, first_name FROM user_profiles WHERE user_id=?", (uid,)).fetchone()
+        package = conn.execute("SELECT package_name FROM package_subscriptions WHERE user_id=?", (uid,)).fetchone()
+    username, first_name = profile if profile else ('', 'User')
+    display_name = ('@'+username) if username else (first_name or 'User')
+    m = types.InlineKeyboardMarkup(row_width=2)
+    m.row(types.InlineKeyboardButton("🗑️ Confirm Delete", callback_data=f"userpkgconfirm_{uid}"),
+          types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_action"))
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id,
+        f"⚠️ <b>Delete package for this user?</b>\n👤 {display_name}\n🆔 <code>{uid}</code>\n📦 {package[0] if package else 'No active package'}",
+        parse_mode="HTML", reply_markup=m)
+
+def execute_delete_user_package(call):
+    if call.from_user.id not in admin_ids:
+        bot.answer_callback_query(call.id, "Admin permissions required", show_alert=True)
+        return
+    uid = int(call.data.split('_', 1)[1])
+    now_text = datetime.now().isoformat()
+    with sqlite3.connect(DATABASE_PATH) as conn:
+        profile = conn.execute("SELECT username, first_name FROM user_profiles WHERE user_id=?", (uid,)).fetchone()
+        conn.execute("DELETE FROM package_subscriptions WHERE user_id=?", (uid,))
+        conn.execute("DELETE FROM subscriptions WHERE user_id=?", (uid,))
+        conn.execute("INSERT OR REPLACE INTO package_access_revoked(user_id, revoked_at, revoked_by) VALUES(?,?,?)",
+                     (uid, now_text, call.from_user.id))
+    user_subscriptions.pop(uid, None)
+    bot.answer_callback_query(call.id, "Package deleted; uploads blocked")
+    try:
+        bot.edit_message_text(f"✅ Package access deleted for User ID {uid}.\nThe user must buy a new package and wait for admin approval before uploading again.",
+                              call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
+    try:
+        bot.send_message(uid, "🔒 আপনার প্যাকেজ অ্যাডমিন মুছে দিয়েছেন। এখন ফাইল/বট আপলোড বন্ধ আছে। আবার প্যাকেজ কিনে Admin approval পেলে আপলোড করতে পারবেন।")
+    except Exception as exc:
+        logger.info(f"Could not notify user {uid} about package deletion: {exc}")
+    logger.warning(f"Admin {call.from_user.id} revoked package access for user {uid}")
+
+# Keep admin panel and package menus accessible from the text button.
+def _logic_admin_panel(message):
+    if message.from_user.id not in admin_ids: bot.reply_to(message,"⚠️ Admin permissions required."); return
+    bot.reply_to(message,"👑 Admin Panel",reply_markup=create_admin_panel())
+
+# --- Cleanup Function ---
+def cleanup():
+    logger.warning("Shutdown. Cleaning up processes...")
+    script_keys_to_stop = list(bot_scripts.keys()) 
+    if not script_keys_to_stop: logger.info("No scripts running. Exiting."); return
+    logger.info(f"Stopping {len(script_keys_to_stop)} scripts...")
+    for key in script_keys_to_stop:
+        if key in bot_scripts: logger.info(f"Stopping: {key}"); kill_process_tree(bot_scripts[key])
+        else: logger.info(f"Script {key} already removed.")
+    logger.warning("Cleanup finished.")
+atexit.register(cleanup)
+
+# --- Main Execution ---
+if __name__ == '__main__':
+    logger.info("="*40 + "\n🤖 Bot Starting Up...\n" + f"🐍 Python: {sys.version.split()[0]}\n" +
+                f"🔧 Base Dir: {BASE_DIR}\n📁 Upload Dir: {UPLOAD_BOTS_DIR}\n" +
+                f"📊 Data Dir: {IROTECH_DIR}\n🔑 Owner ID: {OWNER_ID}\n🛡️ Admins: {admin_ids}\n" + "="*40)
+    keep_alive()
+    logger.info("🚀 Starting polling...")
     while True:
         try:
-            now = time.time()
-            conn = get_db()
-            rows = conn.execute(
-                """SELECT DISTINCT user_email
-                   FROM user_numbers
-                   WHERE expires_ts > ? AND (otp_message IS NULL OR otp_message = '')""",
-                (now,)
-            ).fetchall()
-            conn.close()
-
-            for r in rows:
-                u_email = (r["user_email"] or "").strip().lower()
-                if not u_email:
-                    continue
-                u_dict = get_user_dict(u_email)
-                if u_dict and u_dict.get("status") == "ACTIVE":
-                    _fetch_user_numbers_and_sync_otp(u_dict)
+            bot.infinity_polling(logger_level=logging.INFO, timeout=60, long_polling_timeout=30)
+        except requests.exceptions.ReadTimeout: logger.warning("Polling ReadTimeout. Restarting in 5s..."); time.sleep(5)
+        except requests.exceptions.ConnectionError as ce: logger.error(f"Polling ConnectionError: {ce}. Retrying in 15s..."); time.sleep(15)
         except Exception as e:
-            print("Background OTP listener error:", repr(e))
-
-        time.sleep(interval_seconds)
-
-
-def start_background_otp_listener(interval_seconds: int = 5):
-    global _BG_OTP_STARTED
-    with _BG_OTP_LOCK:
-        if _BG_OTP_STARTED:
-            return
-        _BG_OTP_STARTED = True
-        t = threading.Thread(
-            target=_background_otp_listener_loop,
-            args=(interval_seconds,),
-            name="background-otp-listener",
-            daemon=True,
-        )
-        t.start()
-
-
-# ---------------- SESSION BRIDGE ENDPOINTS (MULTI-PANEL) ----------------
-
-def _filter_liveaccess_5h(payload):
-    now = time.time()
-    cutoff = now - LIVEACCESS_TTL_SECONDS
-    raw_services = ((payload or {}).get("data") or {}).get("services") or []
-
-    conn = get_db()
-    conn.execute("DELETE FROM liveaccess_seen WHERE first_seen_ts < ?", (cutoff,))
-
-    filtered_services = []
-    for svc in raw_services:
-        sid = str(svc.get("sid") or "SERVICE")
-        last_at = svc.get("last_at")
-
-        if last_at:
-            try:
-                ts_val = float(last_at)
-                if ts_val > 1e12:
-                    ts_val /= 1000.0
-                if (now - ts_val) > LIVEACCESS_TTL_SECONDS:
-                    continue
-            except (ValueError, TypeError):
-                try:
-                    dt_val = datetime.fromisoformat(str(last_at).replace("Z", "+00:00"))
-                    if (now - dt_val.timestamp()) > LIVEACCESS_TTL_SECONDS:
-                        continue
-                except Exception:
-                    pass
-
-        valid_ranges = []
-        for rng in (svc.get("ranges") or []):
-            rng_str = str(rng).strip()
-            if not rng_str:
-                continue
-            row = conn.execute(
-                "SELECT first_seen_ts FROM liveaccess_seen WHERE sid = ? AND range_val = ?",
-                (sid, rng_str)
-            ).fetchone()
-            if row:
-                if float(row["first_seen_ts"]) >= cutoff:
-                    valid_ranges.append(rng_str)
-            else:
-                conn.execute(
-                    "INSERT OR REPLACE INTO liveaccess_seen (sid, range_val, first_seen_ts) VALUES (?, ?, ?)",
-                    (sid, rng_str, now)
-                )
-                fs_set_doc(
-                    "liveaccess_seen",
-                    f"{sid}__{rng_str}".replace("/", "_"),
-                    {"sid": sid, "range_val": rng_str, "first_seen_ts": now},
-                    merge=True
-                )
-                valid_ranges.append(rng_str)
-
-        if valid_ranges:
-            new_svc = dict(svc)
-            new_svc["ranges"] = valid_ranges
-            filtered_services.append(new_svc)
-
-    conn.commit()
-    conn.close()
-
-    if not isinstance(payload, dict):
-        payload = {"meta": {"code": 200, "status": "success"}, "data": {}}
-    if not isinstance(payload.get("data"), dict):
-        payload["data"] = {}
-    payload["data"]["services"] = filtered_services
-    return payload
-
-
-def _normalize_liveaccess_for_panel(p: dict, raw_json: dict):
-    if p["style"] == "sr1":
-        return _filter_liveaccess_5h(raw_json)
-
-    if p["style"] == "yehub":
-        ranges_map = (raw_json or {}).get("ranges") or {}
-        services = []
-        for sid, rng_list in ranges_map.items():
-            clean_ranges = [str(x).split("|")[-1].strip() for x in (rng_list or []) if str(x).strip()]
-            services.append({"sid": sid, "ranges": clean_ranges})
-        return _filter_liveaccess_5h({"meta": {"code": 200, "status": "success"}, "data": {"services": services}})
-
-    if p["style"] == "slvirtual":
-        rows = (raw_json or {}).get("data") or []
-        by_svc = {}
-        for item in rows:
-            if not isinstance(item, dict):
-                continue
-            sid = str(item.get("service") or item.get("country") or "SERVICE").strip()
-            by_svc.setdefault(sid, [])
-
-            prefix = str(item.get("prefix") or item.get("rangePrefix") or "").strip()
-            tag = str(item.get("tag") or "").strip()
-            tags_list = item.get("tags") if isinstance(item.get("tags"), list) else []
-
-            candidates = []
-            if prefix:
-                candidates.append(f"{prefix}XXX" if not prefix.upper().endswith("XXX") else prefix)
-            if tag:
-                candidates.append(tag)
-            for t in tags_list:
-                t_clean = str(t or "").strip()
-                if t_clean:
-                    candidates.append(t_clean)
-
-            for c in candidates:
-                if c and c not in by_svc[sid]:
-                    by_svc[sid].append(c)
-
-        services = [{"sid": k, "ranges": v} for k, v in by_svc.items() if v]
-        return _filter_liveaccess_5h({"meta": {"code": 200, "status": "success"}, "data": {"services": services}})
-
-    if p["style"] == "zenex":
-        mp = p.get("mapping") or {}
-        raw_list = _extract_nested(raw_json or {}, mp.get("list_key") or "data.active_ranges") or []
-        by_svc = {}
-        for item in raw_list:
-            if not isinstance(item, dict):
-                continue
-            sid = str(item.get(mp.get("service") or "service") or "SERVICE").strip()
-            rng = str(item.get(mp.get("range") or "range") or "").strip()
-            by_svc.setdefault(sid, [])
-            if rng and rng not in by_svc[sid]:
-                by_svc[sid].append(rng)
-        services = [{"sid": k, "ranges": v} for k, v in by_svc.items()]
-        return _filter_liveaccess_5h({"meta": {"code": 200, "status": "success"}, "data": {"services": services}})
-
-    if p["style"] == "zebrasms":
-        rows = ((raw_json or {}).get("data") or {}).get("rows") or []
-        services = []
-        for item in rows:
-            if not isinstance(item, dict):
-                continue
-            sid = str(item.get("sender") or "SERVICE").strip()
-            rng_list = [str(r).strip() for r in (item.get("ranges") or []) if str(r).strip()]
-            if rng_list:
-                services.append({"sid": sid, "ranges": rng_list})
-        return _filter_liveaccess_5h({"meta": {"code": 200, "status": "success"}, "data": {"services": services}})
-
-    return _filter_liveaccess_5h(raw_json)
-
-
-def _fetch_single_panel_console_hits(p: dict) -> list:
-    token = get_api_token(p["key"])
-    if not token:
-        return []
-
-    hits = []
-    if p["style"] == "sr1":
-        ep = p.get("endpoint") or "/console"
-        r = requests.get(f"{p['base_url']}{ep}", headers=upstream_headers(token, p["key"]), timeout=10)
-        res = r.json()
-        list_key = (p.get("mapping") or {}).get("list_key") or "data.hits"
-        raw_hits = _extract_nested(res if isinstance(res, dict) else {}, list_key) or []
-        for h in raw_hits:
-            if isinstance(h, dict):
-                item = dict(h)
-                item["panel"] = p["key"]
-                item["panel_name"] = p["name"]
-                if not item.get("sid") and item.get("service"):
-                    item["sid"] = item.get("service")
-                hits.append(item)
-
-    elif p["style"] == "yehub":
-        ep = p.get("endpoint") or "/console_data"
-        r = requests.get(f"{p['base_url']}{ep}", headers=upstream_headers(token, p["key"]), timeout=10)
-        raw = r.json()
-        for row in (raw.get("table") or []):
-            if isinstance(row, list) and len(row) >= 4:
-                svc = str(row[3] or "").strip()
-                ts_val = row[4] if len(row) > 4 else None
-                hits.append({
-                    "range": row[0],
-                    "country": row[1],
-                    "message": row[2],
-                    "service": svc,
-                    "sid": svc,
-                    "ts": ts_val,
-                    "time": ts_val,
-                    "panel": p["key"],
-                    "panel_name": p["name"],
-                })
-
-    elif p["style"] == "slvirtual":
-        ep = p.get("endpoint") or "/live-console"
-        r = requests.get(f"{p['base_url']}{ep}?limit=50", headers=upstream_headers(token, p["key"]), timeout=10)
-        raw = r.json()
-        for item in (raw.get("data") or []):
-            if not isinstance(item, dict):
-                continue
-            svc = str(item.get("service") or "").strip()
-            t_val = (
-                item.get("time")
-                or item.get("timestamp")
-                or item.get("createdAt")
-                or item.get("created_at")
-                or item.get("ts")
-                or None
-            )
-            hits.append({
-                "number": item.get("maskedNumber", ""),
-                "range": item.get("rangePrefix") or item.get("tag", ""),
-                "country": item.get("country", ""),
-                "service": svc,
-                "sid": svc,
-                "time": t_val,
-                "ts": t_val,
-                "message": item.get("rawSnippet") or item.get("otpCode", ""),
-                "panel": p["key"],
-                "panel_name": p["name"],
-            })
-
-    elif p["style"] == "zenex":
-        ep = p.get("endpoint") or "/v1/active-ranges"
-        mp = p.get("mapping") or {}
-        r = requests.get(f"{p['base_url']}{ep}", headers=upstream_headers(token, p["key"]), timeout=10)
-        raw = r.json()
-        raw_list = _extract_nested(raw if isinstance(raw, dict) else {}, mp.get("list_key") or "data.active_ranges") or []
-        for item in raw_list:
-            if not isinstance(item, dict):
-                continue
-            svc = str(item.get(mp.get("service") or "service") or "").strip()
-            t_val = item.get(mp.get("time") or "created_at")
-            hits.append({
-                "range": item.get(mp.get("range") or "range", ""),
-                "country": item.get("country", ""),
-                "service": svc,
-                "sid": svc,
-                "time": _format_ts_or_ms(t_val) if t_val else "",
-                "ts": t_val,
-                "message": item.get("message") or f"Active route ({item.get('tag', 'General')}) - {item.get('hits', 0)} hits",
-                "panel": p["key"],
-                "panel_name": p["name"],
-            })
-
-    elif p["style"] == "zebrasms":
-        ep = p.get("endpoint") or "/publicapi/getupdate"
-        r = requests.get(f"{p['base_url']}{ep}", headers=upstream_headers(token, p["key"]), timeout=10)
-        raw = r.json()
-        meta_code = (raw.get("meta") or {}).get("code")
-        if meta_code == 0:
-            rows = ((raw.get("data") or {}).get("rows")) or []
-            for item in rows:
-                if not isinstance(item, dict):
-                    continue
-                svc = str(item.get("sender") or "SMS").strip()
-                raw_ts = item.get("at_ms")
-                formatted_time = _format_ts_or_ms(raw_ts)
-                num_str = str(item.get("number") or "").strip()
-                clean_digits = num_str.lstrip("+")
-                rng_guess = f"{clean_digits[:6]}XXX" if len(clean_digits) >= 6 else clean_digits
-                hits.append({
-                    "number": num_str,
-                    "range": rng_guess,
-                    "country": str(item.get("country") or ""),
-                    "operator": str(item.get("operator") or ""),
-                    "service": svc,
-                    "sid": svc,
-                    "time": formatted_time,
-                    "ts": raw_ts,
-                    "message": str(item.get("message") or ""),
-                    "panel": p["key"],
-                    "panel_name": p["name"],
-                })
-
-    return hits
-
-
-def _fetch_all_panels_console_hits():
-    combined_hits = []
-    errors = []
-    for pk in MASTER_API_CONFIG["panel_order"]:
-        p = PANELS.get(pk)
-        if not p or not get_panel_active_flag(pk):
-            continue
-        try:
-            combined_hits.extend(_fetch_single_panel_console_hits(p))
-        except Exception as e:
-            errors.append(f"{p['name']}: {e}")
-    return combined_hits, errors
-
-
-def _fetch_liveaccess_for_panel(p: dict) -> dict:
-    token = get_api_token(p["key"])
-    if p["style"] == "sr1":
-        la_ep = (p.get("extra_endpoints") or {}).get("live_access") or "/liveaccess"
-        r = requests.get(f"{p['base_url']}{la_ep}", headers=upstream_headers(token, p["key"]), timeout=10)
-        return _normalize_liveaccess_for_panel(p, r.json())
-    if p["style"] == "yehub":
-        la_ep = (p.get("extra_endpoints") or {}).get("live_access") or "/live_access_data"
-        r = requests.get(f"{p['base_url']}{la_ep}", headers=upstream_headers(token, p["key"]), timeout=10)
-        return _normalize_liveaccess_for_panel(p, r.json())
-    if p["style"] == "slvirtual":
-        la_ep = (p.get("extra_endpoints") or {}).get("live_access") or "/available-countries"
-        r = requests.get(f"{p['base_url']}{la_ep}", headers=upstream_headers(token, p["key"]), timeout=10)
-        return _normalize_liveaccess_for_panel(p, r.json())
-    if p["style"] == "zenex":
-        la_ep = (p.get("extra_endpoints") or {}).get("live_access") or p.get("endpoint") or "/v1/active-ranges"
-        r = requests.get(f"{p['base_url']}{la_ep}", headers=upstream_headers(token, p["key"]), timeout=10)
-        return _normalize_liveaccess_for_panel(p, r.json())
-    if p["style"] == "zebrasms":
-        la_ep = (p.get("extra_endpoints") or {}).get("live_access") or "/publicapi/liveaccess"
-        params = {}
-        try:
-            sender_q = (request.args.get("sender") or "").strip()
-            if sender_q:
-                params["sender"] = sender_q
-        except RuntimeError:
-            pass
-        r = requests.get(
-            f"{p['base_url']}{la_ep}",
-            headers=upstream_headers(token, p["key"]),
-            params=params,
-            timeout=10,
-        )
-        return _normalize_liveaccess_for_panel(p, r.json())
-    return {"meta": {"code": 200, "status": "success"}, "data": {"services": []}}
-
-
-@app.route("/api/bridge/console")
-@user_login_required
-def bridge_console(user):
-    explicit_panel = (request.args.get("panel") or request.headers.get("X-Panel") or "").strip()
-    if explicit_panel and explicit_panel.lower() not in ("all", "master", "auto"):
-        p = resolve_panel(explicit_panel)
-        if not get_panel_active_flag(p["key"]):
-            return panel_off_json(p["key"], 503)
-        try:
-            hits = _fetch_single_panel_console_hits(p)
-            return jsonify({
-                "meta": {"code": 200, "status": "success"},
-                "panel": p["key"],
-                "panel_name": p["name"],
-                "voltx_active": get_panel_active_flag("1"),
-                "panel_active": True,
-                "data": {"hits": hits},
-            })
-        except Exception as e:
-            return jsonify({
-                "meta": {"code": 500, "status": "error"},
-                "panel": p["key"],
-                "message": str(e),
-                "data": {"hits": []},
-            })
-
-    any_active = any(get_panel_active_flag(pk) for pk in MASTER_API_CONFIG["panel_order"])
-    if not any_active:
-        return panel_off_json("1", 503)
-
-    combined_hits, errors = _fetch_all_panels_console_hits()
-    return jsonify({
-        "meta": {"code": 200, "status": "success"},
-        "panel": "all",
-        "panel_name": "All Servers",
-        "voltx_active": get_panel_active_flag("1"),
-        "panel_active": True,
-        "errors": errors,
-        "data": {"hits": combined_hits},
-    })
-
-
-@app.route("/api/bridge/liveaccess")
-@user_login_required
-def bridge_liveaccess(user):
-    p = resolve_panel()
-    if not get_panel_active_flag(p["key"]):
-        return panel_off_json(p["key"], 503)
-    try:
-        res = _fetch_liveaccess_for_panel(p)
-        if isinstance(res, dict):
-            res["panel"] = p["key"]
-            res["voltx_active"] = get_panel_active_flag("1")
-            res["panel_active"] = True
-            res["panel_name"] = p["name"]
-        return jsonify(res)
-    except Exception as e:
-        return jsonify({"meta": {"code": 500, "status": "error"}, "panel": p["key"], "message": str(e), "data": {"services": []}})
-
-
-@app.route("/api/bridge/getnum", methods=["POST"])
-@user_login_required
-def bridge_getnum(user):
-    payload = request.get_json(silent=True) or {}
-    raw_panel = str(payload.get("panel") or "").strip()
-    raw_range = str(payload.get("range", "")).strip()
-    if raw_panel and raw_panel.lower() not in ("master", "auto", "all"):
-        p = resolve_panel(raw_panel)
-        if not get_panel_active_flag(p["key"]):
-            return panel_off_json(p["key"], 503)
-        return jsonify(_create_number_for_user(user, raw_range, p["key"]))
-    return jsonify(_create_number_for_user(user, raw_range, "master"))
-
-
-@app.route("/api/bridge/my-numbers")
-@user_login_required
-def bridge_my_numbers(user):
-    raw_panel = request.args.get("panel", "").strip()
-    p = resolve_panel(raw_panel) if raw_panel else None
-    formatted, current_balance = _fetch_user_numbers_and_sync_otp(user, p["key"] if p else None)
-    return jsonify({
-        "ok": True,
-        "numbers": formatted,
-        "balance": current_balance,
-        "panels": get_panels_status_map(),
-        "panel_active": get_panel_active_flag(p["key"] if p else "1"),
-        "panel_name": p["name"] if p else PANEL_BRAND_NAME,
-    })
-
-
-# ---------------- PUBLIC / USER & MASTER API v1 ENDPOINTS ----------------
-
-@app.route("/api/v1/master/config", methods=["GET"])
-@public_api_key_required
-def api_v1_master_config(user):
-    return jsonify({
-        "meta": {"code": 200, "status": "success"},
-        "master_config": MASTER_API_CONFIG,
-        "panels": get_panels_status_map(),
-    })
-
-
-@app.route("/api/v1/master/getnum", methods=["POST"])
-@public_api_key_required
-def api_v1_master_getnum(user):
-    payload = request.get_json(silent=True) or request.form.to_dict() or {}
-    raw_range = str(
-        payload.get("range")
-        or payload.get("rid")
-        or payload.get("range_id")
-        or payload.get("rangePrefix")
-        or ""
-    ).strip()
-    res = _create_number_for_user(user, raw_range, "master")
-    if not res.get("ok"):
-        return jsonify({"meta": {"code": 400, "status": "error"}, "message": res.get("message")}), 400
-    return jsonify({
-        "meta": {"code": 200, "status": "success"},
-        "matched_panel": res.get("matched_panel"),
-        "matched_panel_name": res.get("matched_panel_name"),
-        "data": res["item"],
-    })
-
-
-@app.route("/api/v1/liveaccess", methods=["GET"])
-@public_api_key_required
-def api_v1_liveaccess(user):
-    p = resolve_panel()
-    if not get_panel_active_flag(p["key"]):
-        return panel_off_json(p["key"], 503)
-    try:
-        return jsonify(_fetch_liveaccess_for_panel(p))
-    except Exception as e:
-        return jsonify({"meta": {"code": 500, "status": "error"}, "message": str(e), "data": {"services": []}}), 500
-
-
-@app.route("/api/v1/getnum", methods=["POST"])
-@public_api_key_required
-def api_v1_getnum(user):
-    payload = request.get_json(silent=True) or request.form.to_dict() or {}
-    raw_panel = str(payload.get("panel") or request.args.get("panel") or request.headers.get("X-Panel") or "master").strip()
-    raw_range = str(
-        payload.get("range")
-        or payload.get("rid")
-        or payload.get("range_id")
-        or payload.get("rangePrefix")
-        or ""
-    ).strip()
-
-    if raw_panel and raw_panel.lower() not in ("master", "auto", "all"):
-        p = resolve_panel(raw_panel)
-        if not get_panel_active_flag(p["key"]):
-            return panel_off_json(p["key"], 503)
-        res = _create_number_for_user(user, raw_range, p["key"])
-    else:
-        res = _create_number_for_user(user, raw_range, "master")
-
-    if not res.get("ok"):
-        return jsonify({"meta": {"code": 400, "status": "error"}, "message": res.get("message")}), 400
-    return jsonify({
-        "meta": {"code": 200, "status": "success"},
-        "matched_panel": res.get("matched_panel") or res["item"].get("panel"),
-        "matched_panel_name": res.get("matched_panel_name") or res["item"].get("panel_name"),
-        "data": res["item"],
-    })
-
-
-@app.route("/api/v1/success-otp", methods=["GET"])
-@public_api_key_required
-def api_v1_success_otp(user):
-    raw_panel = (request.args.get("panel") or request.headers.get("X-Panel") or "").strip()
-    p = resolve_panel(raw_panel) if raw_panel else None
-    formatted, current_balance = _fetch_user_numbers_and_sync_otp(user, p["key"] if p else None)
-
-    otps = []
-    for item in formatted:
-        if item.get("otp_message"):
-            otps.append({
-                "id": item["id"],
-                "panel": item["panel"],
-                "panel_name": item["panel_name"],
-                "number": item["full_number"],
-                "range": item["range"],
-                "country": item["country"],
-                "message": item["otp_message"],
-                "earned_amount": item["earned_amount"],
-                "created_at": item["created_at"],
-            })
-
-    conn = get_db()
-    if p:
-        log_rows = [dict(r) for r in conn.execute(
-            "SELECT * FROM otp_logs WHERE user_email = ? AND panel_key = ? ORDER BY id DESC LIMIT 100",
-            (user["email"], p["key"])
-        ).fetchall()]
-    else:
-        log_rows = [dict(r) for r in conn.execute(
-            "SELECT * FROM otp_logs WHERE user_email = ? ORDER BY id DESC LIMIT 100",
-            (user["email"],)
-        ).fetchall()]
-    conn.close()
-
-    return jsonify({
-        "meta": {"code": 200, "status": "success"},
-        "data": {
-            "otps": otps,
-            "logs": log_rows,
-            "balance": current_balance,
-        }
-    })
-
-
-@app.route("/api/v1/my-numbers", methods=["GET"])
-@public_api_key_required
-def api_v1_my_numbers(user):
-    raw_panel = request.args.get("panel", "").strip()
-    p = resolve_panel(raw_panel) if raw_panel else None
-    formatted, current_balance = _fetch_user_numbers_and_sync_otp(user, p["key"] if p else None)
-    return jsonify({
-        "meta": {"code": 200, "status": "success"},
-        "data": {
-            "numbers": formatted,
-            "balance": current_balance,
-        }
-    })
-
-
-@app.route("/api/v1/console", methods=["GET"])
-@public_api_key_required
-def api_v1_console(user):
-    raw_panel = (request.args.get("panel") or request.headers.get("X-Panel") or "all").strip()
-    if raw_panel.lower() in ("all", "master", "auto"):
-        hits, errors = _fetch_all_panels_console_hits()
-        return jsonify({
-            "meta": {"code": 200, "status": "success"},
-            "panel": "all",
-            "errors": errors,
-            "data": {"hits": hits},
-        })
-
-    p = resolve_panel(raw_panel)
-    if not get_panel_active_flag(p["key"]):
-        return panel_off_json(p["key"], 503)
-    try:
-        hits = _fetch_single_panel_console_hits(p)
-        return jsonify({
-            "meta": {"code": 200, "status": "success"},
-            "panel": p["key"],
-            "data": {"hits": hits},
-        })
-    except Exception as e:
-        return jsonify({"meta": {"code": 500, "status": "error"}, "message": str(e), "data": {"hits": []}}), 500
-
-
-# ---------------- USER PAYMENT (Saved Addresses & Withdraw) ----------------
-
-@app.route("/payment/save-address", methods=["POST"])
-@user_login_required
-def save_address(user):
-    gateway = request.form.get("gateway", "").strip()
-    label = request.form.get("label", "").strip()
-    wallet_address = request.form.get("wallet_address", "").strip()
-
-    if gateway not in ("USDT SOL Network", "bKash", "Nagad"):
-        flash("Please select a valid gateway.", "error")
-        return redirect(url_for("payment_page"))
-    if not label or not wallet_address:
-        flash("Label and wallet/account number are required.", "error")
-        return redirect(url_for("payment_page"))
-
-    addr_id = secrets.token_hex(5).upper()
-    conn = get_db()
-    conn.execute("""
-        INSERT INTO payment_addresses (id, user_email, gateway, label, address, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (
-        addr_id,
-        user["email"],
-        gateway,
-        label,
-        wallet_address,
-        datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
-    ))
-    conn.commit()
-    conn.close()
-    sync_payment_address_to_firestore(addr_id)
-
-    flash("Payment address saved successfully!", "success")
-    return redirect(url_for("payment_page"))
-
-
-@app.route("/payment", methods=["GET", "POST"])
-@user_login_required
-def payment_page(user):
-    conn = get_db()
-
-    if request.method == "POST":
-        address_id = request.form.get("address_id", "").strip()
-        try:
-            amount = float(request.form.get("amount", "0"))
-        except ValueError:
-            conn.close()
-            flash("Invalid withdraw amount.", "error")
-            return redirect(url_for("payment_page"))
-
-        addr_row = conn.execute(
-            "SELECT * FROM payment_addresses WHERE id = ? AND user_email = ?",
-            (address_id, user["email"])
-        ).fetchone()
-
-        if not addr_row:
-            conn.close()
-            flash("Please select a valid saved payment address.", "error")
-            return redirect(url_for("payment_page"))
-
-        if amount < 0.50 or amount > float(user["balance"]):
-            conn.close()
-            flash("Minimum withdraw is $0.50 and must not exceed your balance.", "error")
-            return redirect(url_for("payment_page"))
-
-        withdraw_id = secrets.token_hex(5).upper()
-        conn.execute(
-            "UPDATE users SET balance = ROUND(balance - ?, 4) WHERE email = ?",
-            (amount, user["email"])
-        )
-        conn.execute("""
-            INSERT INTO withdrawals (
-                id, user_email, user_name, method, wallet_number, amount,
-                status, reason, created_at, decided_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 'PENDING', '', ?, '')
-        """, (
-            withdraw_id,
-            user["email"],
-            user["name"],
-            addr_row["gateway"],
-            f"{addr_row['label']} ({addr_row['address']})",
-            amount,
-            datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
-        ))
-        conn.commit()
-        conn.close()
-        sync_user_to_firestore(user["email"])
-        sync_withdrawal_to_firestore(withdraw_id)
-
-        flash("Withdraw request submitted! Waiting for Admin approval.", "success")
-        return redirect(url_for("payment_page"))
-
-    user_addresses = [dict(r) for r in conn.execute(
-        "SELECT * FROM payment_addresses WHERE user_email = ? ORDER BY rowid DESC", (user["email"],)
-    ).fetchall()]
-
-    user_withdraws = [dict(r) for r in conn.execute(
-        "SELECT * FROM withdrawals WHERE user_email = ? ORDER BY rowid DESC", (user["email"],)
-    ).fetchall()]
-    conn.close()
-
-    fresh_user = get_user_dict(user["email"])
-    return render_template(
-        "payment.html",
-        user=fresh_user,
-        sidebar_items=SIDEBAR_ITEMS,
-        active="payment",
-        addresses=user_addresses,
-        withdrawals=user_withdraws,
-        panel_brand_name=PANEL_BRAND_NAME,
-    )
-
-
-# ---------------- PANEL PAGES & PUBLIC API DOCS ----------------
-
-@app.route("/api-docs")
-@app.route("/api-docs.html")
-def public_api_docs():
-    email = session.get("user_email")
-    user = get_user_dict(email) if email else None
-    return render_template(
-        "api_docs.html",
-        user=user,
-        sidebar_items=SIDEBAR_ITEMS,
-        active="api-docs",
-        base_path=f"{get_base_url()}/api/v1",
-        public_docs=True,
-        panel_brand_name=PANEL_BRAND_NAME,
-        panels_status=get_panels_status_map(),
-        master_config=MASTER_API_CONFIG,
-    )
-
-
-@app.route("/dashboard")
-@user_login_required
-def dashboard(user):
-    return render_template(
-        "dashboard.html",
-        user=user,
-        sidebar_items=SIDEBAR_ITEMS,
-        active="dashboard",
-        voltx_panel_active=get_panel_active_flag("1"),
-        panel_brand_name=PANEL_BRAND_NAME,
-        panels_status=get_panels_status_map(),
-    )
-
-
-@app.route("/page/<section_key>")
-@user_login_required
-def section_page(user, section_key):
-    if section_key == "payment":
-        return redirect(url_for("payment_page"))
-    if section_key == "api-docs":
-        return redirect(url_for("public_api_docs"))
-
-    valid = {item["key"]: item for item in SIDEBAR_ITEMS}
-    if section_key not in valid:
-        return redirect(url_for("dashboard"))
-
-    panel_active = get_panel_active_flag("1")
-    panels_status = get_panels_status_map()
-
-    if section_key == "profile":
-        return render_template(
-            "profile.html",
-            user=user,
-            sidebar_items=SIDEBAR_ITEMS,
-            active="profile",
-            voltx_panel_active=panel_active,
-            panel_brand_name=PANEL_BRAND_NAME,
-            panels_status=panels_status,
-        )
-    if section_key == "get-number":
-        return render_template(
-            "get_number.html",
-            user=user,
-            sidebar_items=SIDEBAR_ITEMS,
-            active="get-number",
-            voltx_panel_active=panel_active,
-            panel_brand_name=PANEL_BRAND_NAME,
-            panels_status=panels_status,
-        )
-    if section_key == "console":
-        return render_template(
-            "console.html",
-            user=user,
-            sidebar_items=SIDEBAR_ITEMS,
-            active="console",
-            voltx_panel_active=panel_active,
-            panel_brand_name=PANEL_BRAND_NAME,
-            panels_status=panels_status,
-        )
-    if section_key == "access-list":
-        return render_template(
-            "access_list.html",
-            user=user,
-            sidebar_items=SIDEBAR_ITEMS,
-            active=section_key,
-            section=valid[section_key],
-            voltx_panel_active=panel_active,
-            panel_brand_name=PANEL_BRAND_NAME,
-            panels_status=panels_status,
-        )
-
-    return render_template(
-        "section.html",
-        user=user,
-        sidebar_items=SIDEBAR_ITEMS,
-        active=section_key,
-        section=valid[section_key],
-        voltx_panel_active=panel_active,
-        panel_brand_name=PANEL_BRAND_NAME,
-        panels_status=panels_status,
-    )
-
-
-@app.route("/logout")
-def logout():
-    session.clear()
-    return redirect(url_for("login"))
-
-
-init_db()
-start_background_otp_listener(5)
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+            logger.critical(f"💥 Unrecoverable polling error: {e}", exc_info=True)
+            logger.info("Restarting polling in 30s due to critical error..."); time.sleep(30)
+        finally: logger.warning("Polling attempt finished. Will restart if in loop."); time.sleep(1)
